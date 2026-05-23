@@ -1,0 +1,12 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "version": 2,
+  "installCommand": "pip install -r requirements.txt",
+  "functions": {
+    "app/main.py": {
+      "maxDuration": 60,
+      "memory": 2048,
+      "excludeFiles": "{tests/**,openspec/**,.git/**,**/__pycache__/**,**/.pytest_cache/**,.venv/**,venv/**,env/**,.env*,htmlcov/**,.coverage*,**/.mypy_cache/**,**/.ruff_cache/**,.hypothesis/**,.atl/**,scripts/**,agent-tools/**,terminals/**,**/*.pyc,**/*.pyo,**/*.log,Dockerfile*,docker-compose*,render.yaml}"
+    }
+  }
+}
