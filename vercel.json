@@ -7,12 +7,5 @@
       "maxDuration": 60,
       "memory": 2048
     }
-  },
-  "experimentalServices": {
-    "amortization_dry_run": {
-      "type": "worker",
-      "entrypoint": "app/workflows/amortization_dry_run_workflow.py",
-      "topics": ["__wkf_*"]
-    }
   }
 }

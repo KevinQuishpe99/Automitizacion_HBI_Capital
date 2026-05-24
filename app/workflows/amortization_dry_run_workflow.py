@@ -1,7 +1,10 @@
 """
 Workflow durable: amortization dry-run (Fase 4).
 
-Entrypoint Vercel: vercel.json → experimentalServices.amortization_dry_run
+Código listo para Vercel Workflows; en deploy actual no está activo porque
+``experimentalServices`` no puede coexistir con ``functions`` en vercel.json.
+Para activarlo: migrar FastAPI a ``experimentalServices`` (framework Services)
+y registrar este worker ahí. Mientras tanto usar ``JOB_RUNNER_BACKEND=background``.
 """
 
 from __future__ import annotations
