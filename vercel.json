@@ -3,9 +3,15 @@
   "version": 2,
   "installCommand": "pip install -r requirements.txt",
   "functions": {
-    "app/main.py": {
+    "api/index.py": {
       "maxDuration": 60,
       "memory": 2048
     }
-  }
+  },
+  "rewrites": [
+    {
+      "source": "/(.*)",
+      "destination": "/api/index.py"
+    }
+  ]
 }
