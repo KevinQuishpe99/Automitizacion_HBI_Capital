@@ -83,3 +83,4 @@ Al arrancar en local, `python-dotenv` carga `.env` automaticamente.
 ## Documentacion adicional
 - Flujo Power Automate: `docs/power-automate-flow.md`
 - Deploy en Render: `docs/deploy-render.md`
+- 
