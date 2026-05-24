@@ -1,7 +1,7 @@
 import logging
 import os
 import uuid
-from asyncio import Lock, create_task
+from asyncio import create_task
 from base64 import b64decode, b64encode
 from datetime import datetime, timezone
 from time import perf_counter
@@ -23,24 +23,18 @@ from app.application.use_cases.ensure_asientos_contables_folders import ensure_a
 from app.application.use_cases.merge_composite_validado_pdfs import merge_composite_validado_pdfs
 from app.application.use_cases.validate_payment_report import validate_payment_report_and_replace_excel
 from app.application.job_status_enrichment import enrich_job_for_http_response
+from app.application.job_store_factory import get_job_store
 from app.domain.exceptions import GraphConfigError
 from app.models import GraphUploadRequest, MergeCompositeValidadoRequest, NotifyValidarExtractosRequest
 
 router = APIRouter(prefix="/graph/sharepoint", tags=["sharepoint"])
 logger = logging.getLogger(__name__)
-_job_lock = Lock()
-_validation_jobs: dict[str, dict[str, Any]] = {}
-
-
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
 async def _set_job(job_id: str, updates: dict[str, Any]) -> None:
-    async with _job_lock:
-        current = _validation_jobs.get(job_id, {})
-        current.update(updates)
-        _validation_jobs[job_id] = current
+    await get_job_store().update_job(job_id, updates)
 
 
 async def _run_validation_job(job_id: str, graph: GraphClientDep) -> None:
@@ -477,8 +471,9 @@ async def validate_payment_report_queue(graph: GraphClientDep) -> dict:
     Encola la validación y responde inmediato con job_id para evitar timeout en cliente.
     """
     job_id = str(uuid.uuid4())
-    async with _job_lock:
-        _validation_jobs[job_id] = {
+    await get_job_store().create_job(
+        job_id,
+        {
             "job_id": job_id,
             "status": "queued",
             "created_at": _utc_now_iso(),
@@ -487,7 +482,8 @@ async def validate_payment_report_queue(graph: GraphClientDep) -> dict:
             "finished_at": None,
             "result": None,
             "error": None,
-        }
+        },
+    )
     create_task(_run_validation_job(job_id, graph))
     logger.info("job %s: encolado validate_payment_report", job_id)
     return {
@@ -500,8 +496,7 @@ async def validate_payment_report_queue(graph: GraphClientDep) -> dict:
 
 @router.get("/validate-payment-report/jobs/{job_id}")
 async def validate_payment_report_job_status(job_id: str) -> dict:
-    async with _job_lock:
-        job = _validation_jobs.get(job_id)
+    job = await get_job_store().get_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     return job
@@ -509,8 +504,7 @@ async def validate_payment_report_job_status(job_id: str) -> dict:
 
 @router.get("/notify-validar-extractos-email/jobs/{job_id}")
 async def notify_validar_extractos_job_status(job_id: str) -> dict:
-    async with _job_lock:
-        job = _validation_jobs.get(job_id)
+    job = await get_job_store().get_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     return enrich_job_for_http_response(job)
@@ -518,8 +512,7 @@ async def notify_validar_extractos_job_status(job_id: str) -> dict:
 
 @router.get("/merge-composite-validado-pdfs/jobs/{job_id}")
 async def merge_composite_validado_pdfs_job_status(job_id: str) -> dict:
-    async with _job_lock:
-        job = _validation_jobs.get(job_id)
+    job = await get_job_store().get_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     return enrich_job_for_http_response(job)
@@ -538,8 +531,9 @@ async def post_merge_composite_validado_pdfs(
     """
     payload = body or MergeCompositeValidadoRequest()
     job_id = str(uuid.uuid4())
-    async with _job_lock:
-        _validation_jobs[job_id] = {
+    await get_job_store().create_job(
+        job_id,
+        {
             "job_id": job_id,
             "type": "merge_composite_validado_pdfs",
             "status": "queued",
@@ -550,7 +544,8 @@ async def post_merge_composite_validado_pdfs(
             "result": None,
             "error": None,
             "force_rebuild": payload.force_rebuild,
-        }
+        },
+    )
     create_task(
         _run_merge_composite_validado_pdfs_job(
             job_id, graph, force_rebuild=payload.force_rebuild
@@ -587,8 +582,9 @@ async def notify_validar_extractos_email(
     """
     payload = body or NotifyValidarExtractosRequest()
     job_id = str(uuid.uuid4())
-    async with _job_lock:
-        _validation_jobs[job_id] = {
+    await get_job_store().create_job(
+        job_id,
+        {
             "job_id": job_id,
             "type": "notify_validar_extractos",
             "status": "queued",
@@ -598,7 +594,8 @@ async def notify_validar_extractos_email(
             "finished_at": None,
             "result": None,
             "error": None,
-        }
+        },
+    )
     create_task(_run_notify_validar_extractos_job(job_id, graph, payload))
     logger.info("job %s: encolado notify_validar_extractos", job_id)
     return {
@@ -620,8 +617,9 @@ async def post_ensure_asientos_contables_folders(graph: GraphClientDep) -> dict[
     Consulta el estado en ``GET /graph/sharepoint/ensure-asientos-contables-folders/jobs/{job_id}``.
     """
     job_id = str(uuid.uuid4())
-    async with _job_lock:
-        _validation_jobs[job_id] = {
+    await get_job_store().create_job(
+        job_id,
+        {
             "job_id": job_id,
             "type": "ensure_asientos_contables",
             "status": "queued",
@@ -631,7 +629,8 @@ async def post_ensure_asientos_contables_folders(graph: GraphClientDep) -> dict[
             "finished_at": None,
             "result": None,
             "error": None,
-        }
+        },
+    )
     create_task(_run_ensure_asientos_contables_job(job_id, graph))
     logger.info("job %s: encolado ensure_asientos_contables", job_id)
     return {
@@ -647,8 +646,7 @@ async def post_ensure_asientos_contables_folders(graph: GraphClientDep) -> dict[
 
 @router.get("/ensure-asientos-contables-folders/jobs/{job_id}")
 async def get_ensure_asientos_contables_job_status(job_id: str) -> dict[str, Any]:
-    async with _job_lock:
-        job = _validation_jobs.get(job_id)
+    job = await get_job_store().get_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     return job

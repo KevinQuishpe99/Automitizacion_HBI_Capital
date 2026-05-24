@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 from app.adapters.primary.http.deps import init_graph_client
 from app.adapters.primary.http.routers import sharepoint as sharepoint_mod
 from app.adapters.primary.http.routers.sharepoint import router
+from app.application.job_store_factory import reset_job_store_for_tests
 
 
 class _MockGraph:
@@ -33,9 +34,9 @@ def client():
     app = FastAPI()
     init_graph_client(_MockGraph())
     app.include_router(router)
-    sharepoint_mod._validation_jobs.clear()
+    reset_job_store_for_tests()
     yield TestClient(app, raise_server_exceptions=False)
-    sharepoint_mod._validation_jobs.clear()
+    reset_job_store_for_tests()
 
 
 def test_merge_get_job_enriched_completed(client):

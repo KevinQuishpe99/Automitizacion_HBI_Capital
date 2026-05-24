@@ -10,6 +10,8 @@ from pydantic import BaseModel
 from app.adapters.primary.http.deps import GraphClientDep
 from app.application.job_status_enrichment import enrich_job_for_http_response
 from app.application.job_manager import JobManager
+from app.application.job_runner_factory import get_job_runner
+from app.application.jobs.amortization_dry_run_job import execute_amortization_dry_run_job
 from app.application.use_cases.payment_validation_generate import generate_payment_validation
 from app.application.use_cases.payment_validation_finalize import finalize_payment_validation
 from app.application.use_cases.setup_ibr_workbook import (
@@ -25,7 +27,6 @@ from app.application.use_cases.setup_merge_control_workbook import (
     setup_merge_control_workbook,
 )
 from app.application.use_cases.amortization_fill_apply import run_amortization_fill_apply
-from app.application.use_cases.amortization_fill_dry_run import run_amortization_fill_dry_run
 from app.domain.exceptions import GraphConfigError
 
 router = APIRouter(prefix="/graph/sharepoint/payment-validation", tags=["payment-validation"])
@@ -97,7 +98,7 @@ async def _run_generate_job(job_id: str, graph: GraphClientDep, process_date: da
         })
         logger.error("job %s: falló con %s: %s", job_id, type(exc).__name__, exc)
     finally:
-        jm.finish_generate()
+        await jm.finish_generate()
 
 
 async def _run_finalize_job(
@@ -139,7 +140,7 @@ async def _run_finalize_job(
         })
         logger.error("job %s: falló con %s: %s", job_id, type(exc).__name__, exc)
     finally:
-        jm.finish_finalize()
+        await jm.finish_finalize()
 
 
 async def _run_amortization_dry_run_job(
@@ -150,82 +151,14 @@ async def _run_amortization_dry_run_job(
     merge_manifest_path: str | None,
     historical_file_path: str | None,
 ) -> None:
-    jm = JobManager()
-    await jm.set_job(
+    """Wrapper BackgroundTasks → lógica compartida con Vercel Workflow."""
+    await execute_amortization_dry_run_job(
         job_id,
-        {
-            "status": "running",
-            "started_at": _utc_now_iso(),
-            "updated_at": _utc_now_iso(),
-        },
+        graph,
+        report_date_iso=report_date_iso,
+        merge_manifest_path=merge_manifest_path,
+        historical_file_path=historical_file_path,
     )
-    logger.info("job %s: amortization_dry_run iniciado", job_id)
-    started = perf_counter()
-    try:
-        result = await run_amortization_fill_dry_run(
-            graph,
-            report_date_iso=report_date_iso,
-            merge_manifest_path=merge_manifest_path,
-            historical_file_path=historical_file_path,
-        )
-        elapsed_ms = round((perf_counter() - started) * 1000, 2)
-        await jm.set_job(
-            job_id,
-            {
-                "status": "completed",
-                "finished_at": _utc_now_iso(),
-                "updated_at": _utc_now_iso(),
-                "result": {**result, "elapsed_ms": elapsed_ms},
-                "error": None,
-            },
-        )
-        logger.info("job %s: amortization_dry_run completado en %.2fms", job_id, elapsed_ms)
-    except ValueError as exc:
-        msg = str(exc)
-        code = msg.split("|", 1)[0].strip() if "|" in msg else msg.strip()
-        await jm.set_job(
-            job_id,
-            {
-                "status": "failed",
-                "finished_at": _utc_now_iso(),
-                "updated_at": _utc_now_iso(),
-                "result": None,
-                "error": {
-                    "type": "ValueError",
-                    "message": msg,
-                    "error_code": code,
-                },
-            },
-        )
-        logger.warning("job %s: amortization_dry_run falló (validación): %s", job_id, msg)
-    except GraphConfigError as exc:
-        await jm.set_job(
-            job_id,
-            {
-                "status": "failed",
-                "finished_at": _utc_now_iso(),
-                "updated_at": _utc_now_iso(),
-                "result": None,
-                "error": {
-                    "type": "GraphConfigError",
-                    "message": str(exc),
-                    "error_code": "graph_config_error",
-                },
-            },
-        )
-        logger.error("job %s: amortization_dry_run config: %s", job_id, exc)
-    except Exception as exc:
-        await jm.set_job(
-            job_id,
-            {
-                "status": "failed",
-                "finished_at": _utc_now_iso(),
-                "updated_at": _utc_now_iso(),
-                "result": None,
-                "error": {"type": type(exc).__name__, "message": str(exc)},
-            },
-        )
-        logger.exception("job %s: amortization_dry_run falló: %s", job_id, exc)
 
 
 async def _run_amortization_apply_job(
@@ -325,7 +258,7 @@ async def queue_generate(
     Power Automate debe llamar este endpoint y luego consultar /jobs/{job_id}.
     """
     jm = JobManager()
-    if not jm.try_start_generate():
+    if not await jm.try_start_generate():
         raise HTTPException(
             status_code=409,
             detail="Ya existe un proceso generate o finalize activo. Consulta /jobs/{job_id}."
@@ -336,7 +269,7 @@ async def queue_generate(
         pd_str = body.process_date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
         process_date = date.fromisoformat(pd_str)
     except ValueError:
-        jm.finish_generate()
+        await jm.finish_generate()
         raise HTTPException(status_code=422, detail="process_date inválido. Usar formato YYYY-MM-DD.")
 
     # Crear el job en estado queued
@@ -371,7 +304,7 @@ async def queue_finalize(
     temporalmente en `sharepoint.py` y NO se consolida todavía.
     """
     jm = JobManager()
-    if not jm.try_start_finalize():
+    if not await jm.try_start_finalize():
         raise HTTPException(
             status_code=409,
             detail="Ya existe un proceso generate o finalize activo. Consulta /jobs/{job_id}."
@@ -385,7 +318,7 @@ async def queue_finalize(
         pd_str = body.process_date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
         process_date = date.fromisoformat(pd_str)
     except ValueError:
-        jm.finish_finalize()
+        await jm.finish_finalize()
         raise HTTPException(status_code=422, detail="process_date inválido. Usar formato YYYY-MM-DD.")
 
     import uuid
@@ -475,15 +408,16 @@ async def queue_amortization_dry_run(
         },
     )
 
-    background_tasks.add_task(
-        _run_amortization_dry_run_job,
-        job_id,
-        graph,
+    runner = get_job_runner()
+    await runner.enqueue_amortization_dry_run(
+        job_id=job_id,
+        graph=graph,
         report_date_iso=report_date,
         merge_manifest_path=manifest_path,
         historical_file_path=historical_path,
+        background_tasks=background_tasks,
     )
-    logger.info("job %s: amortization_dry_run encolado", job_id)
+    logger.info("job %s: amortization_dry_run encolado (%s)", job_id, type(runner).__name__)
 
     return {"job_id": job_id, "status": "queued"}
 
@@ -563,7 +497,7 @@ async def get_job_status(job_id: str) -> dict[str, Any]:
     Devuelve 404 si el job no existe.
     """
     jm = JobManager()
-    job = jm.get_job(job_id)
+    job = await jm.get_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail=f"Job {job_id!r} no encontrado.")
     return enrich_job_for_http_response(job)
