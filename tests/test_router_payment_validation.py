@@ -10,6 +10,13 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.application.job_manager import JobManager
+from app.application.job_store_factory import (
+    _LOCK_GENERATE,
+    _LOCK_HOLDER,
+    _LOCK_TTL_SECONDS,
+    get_job_store,
+    reset_job_store_for_tests,
+)
 from app.adapters.primary.http.routers import payment_validation as payment_validation_router
 from app.adapters.primary.http.routers.payment_validation import router
 from app.adapters.primary.http.deps import init_graph_client
@@ -39,15 +46,10 @@ def build_app() -> FastAPI:
 
 @pytest.fixture(autouse=True)
 def reset_job_manager():
-    """Resetea el Singleton de JobManager entre tests para evitar contaminación."""
-    jm = JobManager()
-    jm._validation_jobs.clear()
-    jm._generate_active = False
-    jm._finalize_active = False
+    """Resetea JobStore y JobManager entre tests para evitar contaminación."""
+    reset_job_store_for_tests()
     yield
-    jm._validation_jobs.clear()
-    jm._generate_active = False
-    jm._finalize_active = False
+    reset_job_store_for_tests()
 
 
 @pytest.fixture
@@ -283,7 +285,7 @@ def test_router_uses_shared_job_manager(client):
     job_id = res.json()["job_id"]
 
     jm = JobManager()
-    job = jm.get_job(job_id)
+    job = asyncio.run(jm.get_job(job_id))
     assert job is not None
     assert job.get("status") in {"queued", "running", "completed", "failed"}
 
@@ -309,8 +311,9 @@ def test_generate_returns_immediately_without_heavy_logic(client):
 # ──────────────────────────────────────────────────────────────────────────────
 def test_generate_returns_409_if_already_active(client):
     """Si hay un generate o finalize activo, debe devolver 409."""
-    jm = JobManager()
-    jm._generate_active = True  # Simular proceso activo
+    asyncio.run(
+        get_job_store().acquire_lock(_LOCK_GENERATE, _LOCK_HOLDER, _LOCK_TTL_SECONDS)
+    )
 
     res = client.post("/graph/sharepoint/payment-validation/generate/queue")
     assert res.status_code == 409
@@ -318,8 +321,9 @@ def test_generate_returns_409_if_already_active(client):
 
 def test_finalize_returns_409_if_generate_active(client):
     """Finalize también debe bloquear si hay un generate activo."""
-    jm = JobManager()
-    jm._generate_active = True
+    asyncio.run(
+        get_job_store().acquire_lock(_LOCK_GENERATE, _LOCK_HOLDER, _LOCK_TTL_SECONDS)
+    )
 
     res = client.post("/graph/sharepoint/payment-validation/finalize/queue")
     assert res.status_code == 409

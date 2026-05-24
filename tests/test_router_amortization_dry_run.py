@@ -6,7 +6,11 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from app.application import job_runner_factory
 from app.application.job_manager import JobManager
+from app.application.job_store_factory import reset_job_store_for_tests
+from app.adapters.secondary import background_job_runner
+from app.adapters.secondary.background_job_runner import BackgroundJobRunner
 from app.adapters.primary.http.routers import payment_validation as payment_validation_router
 from app.adapters.primary.http.routers.payment_validation import router
 from app.adapters.primary.http.deps import init_graph_client
@@ -45,14 +49,11 @@ def build_app() -> FastAPI:
 
 @pytest.fixture(autouse=True)
 def reset_job_manager():
-    jm = JobManager()
-    jm._validation_jobs.clear()
-    jm._generate_active = False
-    jm._finalize_active = False
+    reset_job_store_for_tests()
+    job_runner_factory.reset_job_runner_for_tests()
     yield
-    jm._validation_jobs.clear()
-    jm._generate_active = False
-    jm._finalize_active = False
+    reset_job_store_for_tests()
+    job_runner_factory.reset_job_runner_for_tests()
 
 
 @pytest.fixture
@@ -117,8 +118,8 @@ def test_amortization_dry_run_job_runs_use_case_with_params(client, monkeypatch)
         )
 
     monkeypatch.setattr(
-        payment_validation_router,
-        "_run_amortization_dry_run_job",
+        background_job_runner,
+        "execute_amortization_dry_run_job",
         fake_run,
     )
 
@@ -158,10 +159,13 @@ def test_amortization_dry_run_does_not_put_to_sharepoint(monkeypatch):
             "summary": {"total": 0},
         }
 
+    async def fake_execute(job_id, graph, **kwargs):
+        await fake_run_use_case(graph, **kwargs)
+
     monkeypatch.setattr(
-        payment_validation_router,
-        "run_amortization_fill_dry_run",
-        fake_run_use_case,
+        background_job_runner,
+        "execute_amortization_dry_run_job",
+        fake_execute,
     )
 
     test_client.post(
@@ -234,6 +238,48 @@ def test_amortization_dry_run_enrichment_helper_multi_events():
     out = enrich_job_for_http_response(raw)
     assert out["severity"] == "success"
     assert "análisis preliminar" in out["user_message"].lower()
+
+
+def test_amortization_dry_run_background_runner_used_by_default(client) -> None:
+    assert isinstance(job_runner_factory.get_job_runner(), BackgroundJobRunner)
+
+
+def test_amortization_dry_run_workflow_mode_enqueues_without_inline_execute(
+    client, monkeypatch
+) -> None:
+    executed: list[str] = []
+
+    async def track_execute(job_id, graph, **kwargs):
+        executed.append(job_id)
+
+    monkeypatch.setattr(
+        payment_validation_router,
+        "execute_amortization_dry_run_job",
+        track_execute,
+    )
+
+    enqueued: list[dict] = []
+
+    class _WorkflowRunner:
+        async def enqueue_amortization_dry_run(self, **kwargs):
+            enqueued.append(kwargs)
+
+    monkeypatch.setenv("JOB_RUNNER_BACKEND", "vercel_workflow")
+    monkeypatch.setenv("VERCEL_WORKFLOWS_ENABLED", "true")
+    job_runner_factory.reset_job_runner_for_tests()
+    job_runner_factory.configure_job_runner(_WorkflowRunner())  # type: ignore[arg-type]
+
+    res = client.post(
+        "/graph/sharepoint/payment-validation/amortization/dry-run/queue",
+        json={"report_date_iso": "2026-05-15"},
+    )
+    assert res.status_code == 202
+    body = res.json()
+    assert body["status"] == "queued"
+    assert body.get("job_id")
+    assert len(enqueued) == 1
+    assert enqueued[0]["job_id"] == body["job_id"]
+    assert executed == []
 
 
 def test_amortization_dry_run_failed_enrichment_manifest_not_found():

@@ -1,0 +1,29 @@
+from typing import Any, Protocol, runtime_checkable
+
+
+@runtime_checkable
+class JobStore(Protocol):
+    """
+    Puerto de persistencia de jobs (memoria local, Vercel Blob en fases futuras).
+
+    Un job es un documento JSON con campos habituales: job_id, type, status, request,
+    result, error, timestamps y metadata opcional.
+    """
+
+    async def create_job(self, job_id: str, record: dict[str, Any]) -> None: ...
+
+    async def get_job(self, job_id: str) -> dict[str, Any] | None: ...
+
+    async def update_job(self, job_id: str, updates: dict[str, Any]) -> None: ...
+
+    async def complete_job(self, job_id: str, result: dict[str, Any]) -> None: ...
+
+    async def fail_job(self, job_id: str, error: dict[str, Any]) -> None: ...
+
+    async def append_event(self, job_id: str, event: dict[str, Any]) -> None: ...
+
+    async def acquire_lock(self, key: str, holder: str, ttl_seconds: int) -> bool: ...
+
+    async def release_lock(self, key: str, holder: str) -> None: ...
+
+    async def is_lock_held(self, key: str) -> bool: ...

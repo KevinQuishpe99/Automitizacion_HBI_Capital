@@ -8,3 +8,5 @@ httpx
 python-dotenv
 pypdf
 reportlab
+# Vercel Workflows (solo deploy Vercel con JOB_RUNNER_BACKEND=vercel_workflow)
+vercel>=0.5.2
