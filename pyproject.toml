@@ -14,7 +14,7 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "pypdf>=5.0.0",
     "reportlab>=4.0.0",
-    "vercel>=0.5.2",
+    "vercel>=0.5.9,<0.6.0",
 ]
 
 [project.optional-dependencies]

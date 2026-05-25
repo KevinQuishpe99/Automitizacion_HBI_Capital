@@ -6,6 +6,10 @@ Importar todos los módulos con ``@wf.workflow`` para que el runtime los registr
 
 from __future__ import annotations
 
+from app.workflows.vercel_sdk_compat import apply_vercel_workflow_event_result_compat
+
+apply_vercel_workflow_event_result_compat()
+
 # noqa: F401 — side effect: register workflows on shared ``wf``
 from app.workflows import amortization_dry_run_workflow as _amortization_dry_run_workflow
 from app.workflows import workflow_ping_workflow as _workflow_ping_workflow
