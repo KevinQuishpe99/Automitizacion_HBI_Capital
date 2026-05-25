@@ -21,7 +21,7 @@ def test_vercel_json_services_mode_structure() -> None:
 
     services = config["experimentalServices"]
     assert "api" in services
-    assert "amortization_dry_run" in services
+    assert "workflows" in services
 
     api = services["api"]
     assert api["framework"] == "fastapi"
@@ -30,9 +30,9 @@ def test_vercel_json_services_mode_structure() -> None:
     assert api["maxDuration"] == 60
     assert api["memory"] == 2048
 
-    worker = services["amortization_dry_run"]
+    worker = services["workflows"]
     assert worker["type"] == "worker"
-    assert worker["entrypoint"] == "app/workflows/amortization_dry_run_workflow.py"
+    assert worker["entrypoint"] == "app/workflows/index.py"
     assert worker["topics"] == ["__wkf_*"]
 
 

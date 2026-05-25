@@ -32,6 +32,10 @@ async def execute_amortization_dry_run_job(
     historical_file_path: str | None,
 ) -> None:
     """Marca running → ejecuta dry-run → complete/fail en JobStore."""
+    logger.info(
+        "job %s: amortization_dry_run execute starting (before running)",
+        job_id,
+    )
     jm = JobManager()
     await jm.set_job(
         job_id,

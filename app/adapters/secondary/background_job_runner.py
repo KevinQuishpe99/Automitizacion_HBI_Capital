@@ -5,6 +5,7 @@ from typing import Any
 from fastapi import BackgroundTasks
 
 from app.application.jobs.amortization_dry_run_job import execute_amortization_dry_run_job
+from app.application.jobs.workflow_ping_job import execute_workflow_ping_job
 
 
 class BackgroundJobRunner:
@@ -30,3 +31,13 @@ class BackgroundJobRunner:
             merge_manifest_path=merge_manifest_path,
             historical_file_path=historical_file_path,
         )
+
+    async def enqueue_workflow_ping(
+        self,
+        *,
+        job_id: str,
+        background_tasks: BackgroundTasks | None = None,
+    ) -> None:
+        if background_tasks is None:
+            raise RuntimeError("BackgroundTasks es obligatorio con JOB_RUNNER_BACKEND=background")
+        background_tasks.add_task(execute_workflow_ping_job, job_id)
