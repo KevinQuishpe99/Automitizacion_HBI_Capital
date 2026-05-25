@@ -24,6 +24,7 @@ class VercelWorkflowJobRunner:
         job_id: str,
         workflow_name: str,
         kwargs: dict[str, Any],
+        extra_job_updates: dict[str, Any] | None = None,
     ) -> None:
         try:
             from vercel.workflow import start
@@ -39,21 +40,22 @@ class VercelWorkflowJobRunner:
             workflow_name,
         )
         run = await start(workflow_fn, job_id=job_id, **kwargs)
+        print(f"WORKFLOW_START_RUN_ID job_id={job_id} wrun={run.run_id} workflow={workflow_name}", flush=True)
         logger.info(
             "workflow.start after job_id=%s workflow_name=%s workflow_run_id=%s",
             job_id,
             workflow_name,
             run.run_id,
         )
+        updates: dict[str, Any] = {
+            "workflow_run_id": run.run_id,
+            "workflow_name": workflow_name,
+            "updated_at": _utc_now_iso(),
+        }
+        if extra_job_updates:
+            updates.update(extra_job_updates)
         jm = JobManager()
-        await jm.set_job(
-            job_id,
-            {
-                "workflow_run_id": run.run_id,
-                "workflow_name": workflow_name,
-                "updated_at": _utc_now_iso(),
-            },
-        )
+        await jm.set_job(job_id, updates)
 
     async def enqueue_workflow_ping(self, *, job_id: str) -> None:
         from app.workflows.workflow_ping_workflow import workflow_ping_workflow
@@ -67,6 +69,7 @@ class VercelWorkflowJobRunner:
             job_id=job_id,
             workflow_name=workflow_ping_name(),
             kwargs={},
+            extra_job_updates={"type": "workflow_ping"},
         )
 
     async def enqueue_amortization_dry_run(

@@ -11,18 +11,16 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.adapters.primary.http.routers import diagnostics
-from app.adapters.secondary.vercel_blob_job_store import VercelBlobJobStore
 from app.adapters.secondary.vercel_blob_client import InMemoryVercelBlobClient
+from app.adapters.secondary.vercel_blob_job_store import VercelBlobJobStore
 from app.application import job_runner_factory
-from app.application.job_manager import JobManager
 from app.application.job_store_factory import (
     _resolve_job_store,
     reset_job_store_for_tests,
     reset_job_store_singleton,
 )
 from app.application.jobs.workflow_ping_job import execute_workflow_ping_job
-from app.adapters.secondary.memory_job_store import MemoryJobStore
-from app.adapters.secondary.vercel_blob_job_store import VercelBlobJobStore
+from app.application.jobs.workflow_ping_markers import list_markers, read_marker
 from app.workflows.wf import wf
 
 
@@ -42,11 +40,16 @@ def test_workflow_entrypoint_imports_both_workflows() -> None:
     from app.workflows.amortization_dry_run_workflow import amortization_dry_run_workflow
     from app.workflows.workflow_ping_workflow import workflow_ping_workflow
 
+    from app.workflows.workflow_ping_workflow import workflow_ping_step
+
     registered = list(wf._workflows.keys())
     assert any("amortization_dry_run_workflow" in key for key in registered)
     assert any("workflow_ping_workflow" in key for key in registered)
     assert amortization_dry_run_workflow is not None
     assert workflow_ping_workflow is not None
+    step_keys = list(wf._steps.keys())
+    assert any("workflow_ping_step" in key for key in step_keys)
+    assert workflow_ping_step is not None
 
 
 def test_workflow_ping_job_queued_to_completed() -> None:
@@ -64,6 +67,8 @@ def test_workflow_ping_job_queued_to_completed() -> None:
         assert job is not None
         assert job["status"] == "completed"
         assert job["result"]["message"] == "workflow ping completed"
+        markers = await list_markers("ping-1")
+        assert markers == {"entered": True, "running": True, "completed": True, "failed": False}
 
     asyncio.run(run())
 
@@ -100,6 +105,7 @@ def test_workflow_ping_queue_endpoint_background(
     assert res.status_code == 202
     body = res.json()
     assert body["status"] == "queued"
+    assert body["type"] == "workflow_ping"
     job_id = body["job_id"]
     res2 = workflow_ping_client.get(f"/diagnostics/workflow-ping/jobs/{job_id}")
     assert res2.status_code == 200
@@ -157,8 +163,62 @@ def test_workflow_ping_marks_failed_on_exception() -> None:
         assert job is not None
         assert job["status"] == "failed"
         assert job["error"]["type"] == "RuntimeError"
+        markers = await list_markers("ping-fail")
+        assert markers["failed"] is True
+        failed_marker = await read_marker("ping-fail", "failed")
+        assert failed_marker is not None
+        assert failed_marker["error_type"] == "RuntimeError"
 
     asyncio.run(run())
+
+
+def test_workflow_ping_get_wrong_type_returns_detail(workflow_ping_client: TestClient) -> None:
+    async def seed() -> None:
+        store = VercelBlobJobStore.with_memory_blob(InMemoryVercelBlobClient())
+        from app.application.job_store_factory import configure_job_store
+
+        configure_job_store(store)
+        await store.create_job(
+            "other-job",
+            {
+                "job_id": "other-job",
+                "type": "generate",
+                "status": "queued",
+                "workflow_name": "some_workflow",
+                "workflow_run_id": "wrun_other",
+            },
+        )
+
+    asyncio.run(seed())
+    res = workflow_ping_client.get("/diagnostics/workflow-ping/jobs/other-job")
+    assert res.status_code == 404
+    detail = res.json()["detail"]
+    assert detail["error"] == "Job is not workflow_ping"
+    assert detail["actual_type"] == "generate"
+    assert detail["workflow_run_id"] == "wrun_other"
+
+
+def test_job_raw_safe_endpoint(workflow_ping_client: TestClient) -> None:
+    res = workflow_ping_client.post("/diagnostics/workflow-ping/queue")
+    job_id = res.json()["job_id"]
+    raw = workflow_ping_client.get(f"/diagnostics/jobs/{job_id}/raw-safe")
+    assert raw.status_code == 200
+    body = raw.json()
+    assert body["job_id"] == job_id
+    assert body["type"] == "workflow_ping"
+    assert body["status"] in ("queued", "running", "completed", "failed")
+    assert body["meta_source"] == "vercel_blob"
+    assert "request_keys" in body
+
+
+def test_workflow_ping_markers_endpoint(workflow_ping_client: TestClient) -> None:
+    res = workflow_ping_client.post("/diagnostics/workflow-ping/queue")
+    job_id = res.json()["job_id"]
+    markers_res = workflow_ping_client.get(f"/diagnostics/workflow-ping/jobs/{job_id}/markers")
+    assert markers_res.status_code == 200
+    body = markers_res.json()
+    assert body["job_id"] == job_id
+    assert set(body["markers"].keys()) == {"entered", "running", "completed", "failed"}
 
 
 def test_vercel_workflow_runner_starts_decorated_ping_workflow(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -208,6 +268,8 @@ def test_workflow_ping_queue_endpoint_workflow_mode(
 
     res = workflow_ping_client.post("/diagnostics/workflow-ping/queue")
     assert res.status_code == 202
-    job_id = res.json()["job_id"]
+    body = res.json()
+    job_id = body["job_id"]
+    assert body["type"] == "workflow_ping"
     assert len(enqueued) == 1
     assert enqueued[0] == job_id
