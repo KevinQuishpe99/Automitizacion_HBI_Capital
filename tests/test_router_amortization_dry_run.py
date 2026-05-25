@@ -295,3 +295,23 @@ def test_amortization_dry_run_failed_enrichment_manifest_not_found():
     out = enrich_job_for_http_response(raw)
     assert out["severity"] == "error"
     assert out["error"]["error_code"] == "merge_manifest_not_found"
+
+
+def test_generate_queue_does_not_use_vercel_workflow_runner(client, monkeypatch) -> None:
+    """vercel_workflow solo afecta dry-run; generate sigue con BackgroundTasks."""
+
+    def _fail_if_called():
+        raise AssertionError("get_job_runner no debe usarse en generate/finalize/apply")
+
+    monkeypatch.setenv("JOB_RUNNER_BACKEND", "vercel_workflow")
+    monkeypatch.setenv("VERCEL_WORKFLOWS_ENABLED", "true")
+    job_runner_factory.reset_job_runner_for_tests()
+    monkeypatch.setattr(
+        payment_validation_router,
+        "get_job_runner",
+        _fail_if_called,
+    )
+
+    res = client.post("/graph/sharepoint/payment-validation/generate/queue")
+    assert res.status_code == 202
+    assert res.json()["status"] == "queued"

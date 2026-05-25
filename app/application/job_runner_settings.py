@@ -13,7 +13,9 @@ def job_runner_backend() -> str:
     """
     ``background`` (default) | ``vercel_workflow``.
 
-    En Vercel usar ``JOB_RUNNER_BACKEND=vercel_workflow`` y ``VERCEL_WORKFLOWS_ENABLED=true``.
+    Local/Render: omitir o ``background``.
+    Vercel (dry-run workflow): ``vercel_workflow`` + ``VERCEL_WORKFLOWS_ENABLED=true``.
+    Solo afecta ``POST .../amortization/dry-run/queue``; generate/finalize/apply usan BackgroundTasks.
     """
     explicit = (os.getenv("JOB_RUNNER_BACKEND") or "").strip().lower()
     if explicit in ("background", "vercel_workflow"):
