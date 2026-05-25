@@ -34,6 +34,10 @@ def workflow_amortization_dry_run_name() -> str:
     )
 
 
+def workflow_ping_name() -> str:
+    return (os.getenv("WORKFLOW_PING_NAME") or "").strip() or "workflow_ping_workflow"
+
+
 def is_vercel_runtime() -> bool:
     return (os.getenv("VERCEL") or "").strip() == "1"
 
