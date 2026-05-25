@@ -58,6 +58,10 @@ class VercelWorkflowJobRunner:
     async def enqueue_workflow_ping(self, *, job_id: str) -> None:
         from app.workflows.workflow_ping_workflow import workflow_ping_workflow
 
+        print(
+            f"WORKFLOW_START_PING job_id={job_id} workflow={workflow_ping_name()}",
+            flush=True,
+        )
         await self._start_workflow(
             workflow_fn=workflow_ping_workflow,
             job_id=job_id,
