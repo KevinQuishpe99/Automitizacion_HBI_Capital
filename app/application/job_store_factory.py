@@ -46,11 +46,39 @@ def _resolve_job_store() -> JobStore:
     if backend and backend not in ("", "auto"):
         raise RuntimeError(f"Unknown JOB_STORE_BACKEND: {backend!r}")
 
-    # Auto: Vercel + token → Blob; si no, memoria (Render/local/tests)
-    if is_vercel_runtime() and has_blob_token():
+    # Auto: con token → Blob (API y worker Services comparten Blob aunque VERCEL!=1 en worker)
+    if has_blob_token():
         return _create_vercel_blob_store()
 
     return _create_memory_store()
+
+
+def resolved_job_store_backend_label() -> str:
+    """Etiqueta del backend efectivo (sin secretos)."""
+    explicit = job_store_backend()
+    if explicit:
+        return explicit
+    if has_blob_token():
+        return "vercel_blob_auto"
+    return "memory_auto"
+
+
+def safe_runtime_config() -> dict[str, str | bool]:
+    """Metadata segura para diagnóstico HTTP (sin tokens)."""
+    from app.application.job_runner_settings import job_runner_backend, vercel_workflows_enabled
+
+    import os
+
+    store = get_job_store()
+    return {
+        "job_store_backend": resolved_job_store_backend_label(),
+        "job_runner_backend": job_runner_backend(),
+        "vercel_workflows_enabled": vercel_workflows_enabled(),
+        "has_blob_token": has_blob_token(),
+        "has_blob_store_id": bool((os.getenv("BLOB_STORE_ID") or "").strip()),
+        "store_class": type(store).__name__,
+        "vercel_env_set": is_vercel_runtime(),
+    }
 
 
 def get_job_store() -> JobStore:

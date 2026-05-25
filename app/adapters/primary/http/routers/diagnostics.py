@@ -16,7 +16,7 @@ from app.application.job_runner_settings import (
     use_vercel_workflow_runner,
     workflow_ping_name,
 )
-from app.application.job_store_settings import job_store_backend, is_vercel_runtime
+from app.application.job_store_factory import safe_runtime_config
 from app.application.job_status_enrichment import enrich_job_for_http_response
 
 logger = logging.getLogger(__name__)
@@ -30,13 +30,10 @@ def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _job_store_backend_label() -> str:
-    explicit = job_store_backend()
-    if explicit:
-        return explicit
-    if is_vercel_runtime():
-        return "vercel_blob_auto"
-    return "memory_auto"
+@router.get("/runtime-config-safe")
+async def get_runtime_config_safe() -> dict[str, str | bool]:
+    """Metadata de runtime sin secretos (JobStore/JobRunner en servicio API)."""
+    return safe_runtime_config()
 
 
 @router.post("/workflow-ping/queue", status_code=202)
@@ -45,8 +42,9 @@ async def queue_workflow_ping(background_tasks: BackgroundTasks) -> dict[str, An
     Encola ``workflow_ping`` para validar que el worker Vercel ejecuta workflows.
     """
     job_id = str(uuid.uuid4())
-    store_label = _job_store_backend_label()
-    runner_label = job_runner_backend()
+    runtime = safe_runtime_config()
+    store_label = str(runtime["job_store_backend"])
+    runner_label = str(runtime["job_runner_backend"])
 
     logger.info(
         "workflow_ping queue requested job_id=%s job_store_backend=%s job_runner_backend=%s",

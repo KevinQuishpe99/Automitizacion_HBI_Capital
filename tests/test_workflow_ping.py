@@ -15,8 +15,14 @@ from app.adapters.secondary.vercel_blob_job_store import VercelBlobJobStore
 from app.adapters.secondary.vercel_blob_client import InMemoryVercelBlobClient
 from app.application import job_runner_factory
 from app.application.job_manager import JobManager
-from app.application.job_store_factory import reset_job_store_for_tests
+from app.application.job_store_factory import (
+    _resolve_job_store,
+    reset_job_store_for_tests,
+    reset_job_store_singleton,
+)
 from app.application.jobs.workflow_ping_job import execute_workflow_ping_job
+from app.adapters.secondary.memory_job_store import MemoryJobStore
+from app.adapters.secondary.vercel_blob_job_store import VercelBlobJobStore
 from app.workflows.wf import wf
 
 
@@ -107,6 +113,83 @@ def workflow_ping_client() -> TestClient:
     app = FastAPI()
     app.include_router(diagnostics.router)
     return TestClient(app, raise_server_exceptions=False)
+
+
+def test_job_store_auto_uses_blob_with_token_without_vercel_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Worker Services puede no tener VERCEL=1; con token debe usar Blob."""
+    monkeypatch.delenv("VERCEL", raising=False)
+    monkeypatch.delenv("JOB_STORE_BACKEND", raising=False)
+    monkeypatch.setenv("BLOB_READ_WRITE_TOKEN", "vercel_blob_rw_teststoreid_abc123")
+    reset_job_store_singleton()
+
+    store = _resolve_job_store()
+    assert isinstance(store, VercelBlobJobStore)
+
+
+def test_job_store_explicit_vercel_blob_without_vercel_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("VERCEL", raising=False)
+    monkeypatch.setenv("JOB_STORE_BACKEND", "vercel_blob")
+    monkeypatch.setenv("BLOB_READ_WRITE_TOKEN", "vercel_blob_rw_teststoreid_abc123")
+    reset_job_store_singleton()
+
+    store = _resolve_job_store()
+    assert isinstance(store, VercelBlobJobStore)
+
+
+def test_workflow_ping_marks_failed_on_exception() -> None:
+    async def run() -> None:
+        store = VercelBlobJobStore.with_memory_blob()
+        from app.application.job_store_factory import configure_job_store
+
+        configure_job_store(store)
+        await store.create_job("ping-fail", {"job_id": "ping-fail", "type": "workflow_ping", "status": "queued"})
+
+        async def bad_complete(job_id: str, result: dict) -> None:
+            raise RuntimeError("simulated worker failure")
+
+        with patch.object(store, "complete_job", bad_complete):
+            with pytest.raises(RuntimeError, match="simulated"):
+                await execute_workflow_ping_job("ping-fail")
+
+        job = await store.get_job("ping-fail")
+        assert job is not None
+        assert job["status"] == "failed"
+        assert job["error"]["type"] == "RuntimeError"
+
+    asyncio.run(run())
+
+
+def test_vercel_workflow_runner_starts_decorated_ping_workflow(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def run() -> None:
+        from app.adapters.secondary.vercel_workflow_job_runner import VercelWorkflowJobRunner
+        from app.workflows.workflow_ping_workflow import workflow_ping_workflow
+
+        captured: dict = {}
+
+        async def fake_start(fn, job_id: str, **kwargs):
+            captured["fn"] = fn
+            captured["job_id"] = job_id
+            return MagicMock(run_id="wrun_ref_test")
+
+        with patch("vercel.workflow.start", new_callable=AsyncMock, side_effect=fake_start):
+            runner = VercelWorkflowJobRunner()
+            await runner.enqueue_workflow_ping(job_id="ping-ref")
+
+        assert captured["job_id"] == "ping-ref"
+        assert captured["fn"] is workflow_ping_workflow
+
+    asyncio.run(run())
+
+
+def test_runtime_config_safe_endpoint(workflow_ping_client: TestClient) -> None:
+    res = workflow_ping_client.get("/diagnostics/runtime-config-safe")
+    assert res.status_code == 200
+    body = res.json()
+    assert "job_store_backend" in body
+    assert "has_blob_token" in body
+    assert "store_class" in body
 
 
 def test_workflow_ping_queue_endpoint_workflow_mode(
