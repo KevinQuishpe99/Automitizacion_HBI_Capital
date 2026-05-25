@@ -16,6 +16,7 @@ def test_vercel_json_services_mode_structure() -> None:
 
     assert "functions" not in config
     assert config.get("framework") == "services"
+    assert config.get("installCommand") == "pip install ."
     assert "experimentalServices" in config
 
     services = config["experimentalServices"]
