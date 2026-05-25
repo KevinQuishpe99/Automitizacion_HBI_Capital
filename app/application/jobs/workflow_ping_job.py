@@ -8,6 +8,7 @@ import os
 from app.application.job_runner_settings import job_runner_backend, vercel_workflows_enabled
 from app.application.job_store_factory import get_job_store
 from app.application.job_store_settings import has_blob_token, job_store_backend
+from app.application.jobs.workflow_ping_markers import write_marker
 
 logger = logging.getLogger(__name__)
 
@@ -34,9 +35,15 @@ def _log_worker_job_store_context(job_id: str) -> None:
 
 
 async def execute_workflow_ping_job(job_id: str) -> None:
-    """queued → running → completed; en error → failed en JobStore."""
+    """
+    Ejecutado dentro de ``@wf.step`` (side effects durables en el worker).
+
+    queued → running → completed; en error → failed + marker failed.
+    """
     print(f"WORKFLOW_PING_EXECUTE_ENTER job_id={job_id}", flush=True)
     _log_worker_job_store_context(job_id)
+
+    await write_marker(job_id, "entered")
 
     store = get_job_store()
     try:
@@ -44,11 +51,13 @@ async def execute_workflow_ping_job(job_id: str) -> None:
         await store.update_job(
             job_id,
             {
+                "type": "workflow_ping",
                 "status": "running",
                 "started_at": _utc_now_iso(),
                 "updated_at": _utc_now_iso(),
             },
         )
+        await write_marker(job_id, "running")
         logger.info("workflow_ping updating running job_id=%s store=%s", job_id, type(store).__name__)
 
         print(f"WORKFLOW_PING_SET_COMPLETED job_id={job_id}", flush=True)
@@ -56,6 +65,7 @@ async def execute_workflow_ping_job(job_id: str) -> None:
             job_id,
             {"status": "ok", "message": "workflow ping completed"},
         )
+        await write_marker(job_id, "completed")
         logger.info("workflow_ping completed job_id=%s", job_id)
     except Exception as exc:
         error_type = type(exc).__name__
@@ -66,6 +76,7 @@ async def execute_workflow_ping_job(job_id: str) -> None:
                 job_id,
                 {"type": error_type, "message": str(exc)[:500]},
             )
+            await write_marker(job_id, "failed", {"error_type": error_type})
         except Exception:
             logger.exception("workflow_ping could not persist failed status job_id=%s", job_id)
         raise

@@ -122,6 +122,10 @@ class VercelBlobJobStore:
         self._http_get_max = http_get_max_bytes if http_get_max_bytes is not None else self._inline_max
         self._write_lock = asyncio.Lock()
 
+    @property
+    def blob_client(self) -> VercelBlobClientProtocol:
+        return self._blob
+
     @classmethod
     def from_env(cls) -> VercelBlobJobStore:
         return cls(create_vercel_blob_client_from_env())
