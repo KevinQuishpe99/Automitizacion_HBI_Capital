@@ -1,25 +1,27 @@
 """
-Cliente HTTP mínimo para Vercel Blob (sin SDK npm ni paquete Python oficial).
+Cliente Vercel Blob para JobStore.
 
-Usa la misma API que @vercel/blob (control plane):
-  PUT  https://vercel.com/api/blob/?pathname=...
-  GET  https://{storeId}.private.blob.vercel-storage.com/{pathname}
-  POST https://vercel.com/api/blob/delete  body: {"urls": [...]}
-
-Autenticación: Bearer BLOB_READ_WRITE_TOKEN + header x-vercel-blob-store-id.
+Producción (Vercel): ``VercelBlobSdkClient`` vía ``vercel.blob`` (get/put/delete oficiales).
+Legacy HTTP: ``VercelBlobHttpClient`` solo para tests de reintentos PUT; no construye URLs
+``*.private.blob.vercel-storage.com`` para lectura (provoca SSL hostname mismatch).
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import random
 from collections.abc import Awaitable, Callable
-from typing import Any, Protocol, TypeVar
+from typing import Any, Literal, Protocol, TypeVar
 from urllib.parse import quote
 
 import httpx
+
+logger = logging.getLogger(__name__)
+
+BlobReadMethod = Literal["sdk", "official_http"]
 
 BLOB_API_VERSION = "12"
 DEFAULT_API_BASE = "https://vercel.com/api/blob"
@@ -147,6 +149,179 @@ def _is_retryable_exception(exc: BaseException) -> bool:
     return False
 
 
+def _ssl_or_connect_hint(exc: BaseException) -> str | None:
+    message = str(exc).lower()
+    if "certificate" in message or "ssl" in message or "hostname" in message:
+        return (
+            "fallo de verificación TLS al contactar Blob; use el SDK vercel.blob "
+            "(no construir URLs *.private.blob.vercel-storage.com manualmente)"
+        )
+    return None
+
+
+def create_vercel_blob_client_from_env() -> VercelBlobClientProtocol:
+    """Factory: SDK oficial en runtime; InMemory en tests vía inyección explícita."""
+    return VercelBlobSdkClient.from_env()
+
+
+class VercelBlobSdkClient:
+    """
+    Adapter sobre ``vercel.blob`` (get_async/put_async/delete_async).
+
+    Resuelve pathname → URL vía control plane/head y ``downloadUrl``; no arma hostnames
+    privados a mano desde ``BLOB_STORE_ID``.
+    """
+
+    READ_METHOD: BlobReadMethod = "sdk"
+
+    def __init__(
+        self,
+        *,
+        token: str,
+        access: str = "private",
+        timeout_seconds: float = 60.0,
+    ) -> None:
+        self._token = token.strip()
+        self._access = "private" if access == "private" else "public"
+        self._timeout = timeout_seconds
+        logger.info(
+            "Vercel Blob client: backend=sdk access=%s read_method=%s",
+            self._access,
+            self.READ_METHOD,
+        )
+
+    @classmethod
+    def from_env(cls) -> VercelBlobSdkClient:
+        token = (os.getenv("BLOB_READ_WRITE_TOKEN") or "").strip()
+        if not token:
+            raise ValueError("BLOB_READ_WRITE_TOKEN is required for VercelBlobSdkClient")
+        return cls(token=token)
+
+    def _log_operation(self, operation: str, pathname: str) -> None:
+        logger.debug(
+            "Vercel Blob %s pathname=%s method=%s",
+            operation,
+            pathname,
+            self.READ_METHOD,
+        )
+
+    def _map_sdk_error(
+        self,
+        *,
+        operation: str,
+        pathname: str,
+        exc: BaseException,
+    ) -> VercelBlobHttpError:
+        from vercel.blob.errors import BlobNotFoundError
+
+        if isinstance(exc, BlobNotFoundError):
+            return VercelBlobHttpError(
+                operation=operation,
+                target=pathname,
+                attempt=1,
+                status_code=404,
+                cause=exc,
+            )
+        hint = _ssl_or_connect_hint(exc)
+        snippet = hint or type(exc).__name__
+        status_code = getattr(getattr(exc, "response", None), "status_code", None)
+        logger.warning(
+            "Vercel Blob %s failed pathname=%s method=%s status_code=%s error=%s",
+            operation,
+            pathname,
+            self.READ_METHOD,
+            status_code,
+            type(exc).__name__,
+        )
+        return VercelBlobHttpError(
+            operation=operation,
+            target=pathname,
+            attempt=1,
+            status_code=status_code,
+            response_snippet=snippet,
+            cause=exc,
+        )
+
+    async def put_bytes(
+        self,
+        pathname: str,
+        data: bytes,
+        *,
+        content_type: str = "application/octet-stream",
+        allow_overwrite: bool = True,
+    ) -> dict[str, Any]:
+        from vercel.blob import put_async
+
+        self._log_operation("put", pathname)
+        try:
+            result = await put_async(
+                pathname,
+                data,
+                access=self._access,  # type: ignore[arg-type]
+                content_type=content_type,
+                add_random_suffix=False,
+                overwrite=allow_overwrite,
+                token=self._token,
+            )
+            return {
+                "pathname": result.pathname,
+                "url": result.url,
+                "contentType": result.content_type,
+            }
+        except Exception as exc:
+            raise self._map_sdk_error(operation="put", pathname=pathname, exc=exc) from exc
+
+    async def get_bytes(self, pathname: str) -> bytes | None:
+        from vercel.blob import get_async
+        from vercel.blob.errors import BlobNotFoundError
+
+        self._log_operation("get", pathname)
+        try:
+            result = await get_async(
+                pathname,
+                access=self._access,  # type: ignore[arg-type]
+                token=self._token,
+                timeout=self._timeout,
+            )
+            if result.status_code == 404:
+                return None
+            return result.content or b""
+        except BlobNotFoundError:
+            return None
+        except Exception as exc:
+            raise self._map_sdk_error(operation="get", pathname=pathname, exc=exc) from exc
+
+    async def delete(self, pathname: str) -> None:
+        from vercel.blob import delete_async
+
+        self._log_operation("delete", pathname)
+        try:
+            await delete_async(pathname, token=self._token)
+        except Exception as exc:
+            raise self._map_sdk_error(operation="delete", pathname=pathname, exc=exc) from exc
+
+    async def put_json(
+        self,
+        pathname: str,
+        payload: Any,
+        *,
+        allow_overwrite: bool = True,
+    ) -> dict[str, Any]:
+        data = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        return await self.put_bytes(
+            pathname,
+            data,
+            content_type="application/json",
+            allow_overwrite=allow_overwrite,
+        )
+
+    async def get_json(self, pathname: str) -> Any | None:
+        raw = await self.get_bytes(pathname)
+        if raw is None:
+            return None
+        return json.loads(raw.decode("utf-8"))
+
+
 def _backoff_seconds(attempt_index: int, *, base: float, cap: float) -> float:
     """attempt_index: 0 = primer reintento tras fallo inicial."""
     delay = min(cap, base * (2**attempt_index))
@@ -185,14 +360,12 @@ class VercelBlobHttpClient:
         self._sleep: SleepFn = sleep_fn or asyncio.sleep
 
     @classmethod
-    def from_env(cls) -> VercelBlobHttpClient:
-        token = (os.getenv("BLOB_READ_WRITE_TOKEN") or "").strip()
-        if not token:
-            raise ValueError("BLOB_READ_WRITE_TOKEN is required for VercelBlobHttpClient")
-        store_id = os.getenv("BLOB_STORE_ID")
-        return cls(token=token, store_id=store_id.strip() if store_id else None)
+    def from_env(cls) -> VercelBlobClientProtocol:
+        """Runtime: SDK oficial. Tests de reintentos HTTP instancian ``VercelBlobHttpClient`` directo."""
+        return create_vercel_blob_client_from_env()
 
     def _blob_url(self, pathname: str) -> str:
+        """Solo delete legacy HTTP; no usar para GET (SSL hostname mismatch en Services)."""
         return f"https://{self._store_id}.{self._access}.blob.vercel-storage.com/{pathname}"
 
     def _api_headers(self, extra: dict[str, str] | None = None) -> dict[str, str]:
@@ -320,30 +493,12 @@ class VercelBlobHttpClient:
         return await self._execute_with_retry("put", pathname, _do_put)
 
     async def get_bytes(self, pathname: str) -> bytes | None:
-        url = self._blob_url(pathname)
-        headers = {"authorization": f"Bearer {self._token}"}
-
-        async def _do_get() -> bytes | None:
-            response = await self._http_get(url, headers=headers)
-            if response.status_code == 404:
-                return None
-            if response.status_code >= 400:
-                response.raise_for_status()
-            return response.content
-
-        return await self._execute_with_retry("get", pathname, _do_get)
+        sdk = VercelBlobSdkClient(token=self._token, access=self._access, timeout_seconds=self._timeout)
+        return await sdk.get_bytes(pathname)
 
     async def delete(self, pathname: str) -> None:
-        url = self._blob_url(pathname)
-
-        async def _do_delete() -> None:
-            await self._http_post(
-                f"{self._api_base}/delete",
-                headers=self._api_headers({"content-type": "application/json"}),
-                json_body={"urls": [url]},
-            )
-
-        await self._execute_with_retry("delete", pathname, _do_delete)
+        sdk = VercelBlobSdkClient(token=self._token, access=self._access, timeout_seconds=self._timeout)
+        await sdk.delete(pathname)
 
     async def put_json(
         self,

@@ -22,7 +22,7 @@ from typing import Any
 from app.adapters.secondary.vercel_blob_client import (
     InMemoryVercelBlobClient,
     VercelBlobClientProtocol,
-    VercelBlobHttpClient,
+    create_vercel_blob_client_from_env,
 )
 from app.application.job_store_settings import (
     job_inline_result_max_bytes,
@@ -124,7 +124,7 @@ class VercelBlobJobStore:
 
     @classmethod
     def from_env(cls) -> VercelBlobJobStore:
-        return cls(VercelBlobHttpClient.from_env())
+        return cls(create_vercel_blob_client_from_env())
 
     @classmethod
     def with_memory_blob(

@@ -52,48 +52,6 @@ def test_put_retries_503_then_succeeds() -> None:
     asyncio.run(run())
 
 
-def test_get_retries_timeout_then_succeeds() -> None:
-    async def run() -> None:
-        client = _client()
-        calls = {"n": 0}
-
-        async def fake_get(url: str, *, headers: dict) -> httpx.Response:
-            calls["n"] += 1
-            if calls["n"] == 1:
-                raise httpx.ReadTimeout("timed out", request=_request("GET", url))
-            req = _request("GET", url)
-            return httpx.Response(200, request=req, content=b'{"ok":true}')
-
-        client._http_get = fake_get  # type: ignore[method-assign]
-
-        content = await client.get_bytes("jobs/x/meta.json")
-        assert content == b'{"ok":true}'
-        assert calls["n"] == 2
-
-    asyncio.run(run())
-
-
-def test_delete_retries_429_then_succeeds() -> None:
-    async def run() -> None:
-        client = _client()
-        calls = {"n": 0}
-
-        async def fake_post(url: str, *, headers: dict, json_body: dict) -> httpx.Response:
-            calls["n"] += 1
-            req = _request("POST", url)
-            if calls["n"] == 1:
-                resp = httpx.Response(429, request=req, text="rate limited")
-                resp.raise_for_status()
-            return httpx.Response(200, request=req)
-
-        client._http_post = fake_post  # type: ignore[method-assign]
-
-        await client.delete("jobs/x/meta.json")
-        assert calls["n"] == 2
-
-    asyncio.run(run())
-
-
 def test_put_401_does_not_retry() -> None:
     async def run() -> None:
         client = _client(max_retries=3)
@@ -114,25 +72,6 @@ def test_put_401_does_not_retry() -> None:
         err = exc_info.value
         assert err.status_code == 401
         assert err.attempt == 1
-        assert calls["n"] == 1
-        client._sleep.assert_not_awaited()
-
-    asyncio.run(run())
-
-
-def test_get_404_does_not_retry_returns_none() -> None:
-    async def run() -> None:
-        client = _client(max_retries=3)
-        calls = {"n": 0}
-
-        async def fake_get(url: str, *, headers: dict) -> httpx.Response:
-            calls["n"] += 1
-            return httpx.Response(404, request=_request("GET", url))
-
-        client._http_get = fake_get  # type: ignore[method-assign]
-
-        result = await client.get_bytes("jobs/missing/meta.json")
-        assert result is None
         assert calls["n"] == 1
         client._sleep.assert_not_awaited()
 
