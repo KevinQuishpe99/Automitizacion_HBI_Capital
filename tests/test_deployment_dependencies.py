@@ -46,3 +46,9 @@ def test_vercel_build_check_script() -> None:
     from vercel_build_check import main
 
     assert main() == 0
+
+
+def test_requirements_declares_vercel_min_version() -> None:
+    text = (ROOT / "requirements.txt").read_text(encoding="utf-8")
+    assert "vercel>=" in text
+    assert "0.5.9" in text
