@@ -67,7 +67,14 @@ async def post_release_payment_validation_locks() -> dict[str, bool | str]:
     Libera locks generate/finalize atascados (p. ej. tras pruebas cruzadas Render+Vercel).
     Solo diagnóstico operativo.
     """
-    released = await release_all_payment_validation_locks()
+    try:
+        released = await release_all_payment_validation_locks()
+    except Exception as exc:
+        logger.exception("payment_validation locks release failed")
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "lock_release_failed", "message": str(exc)[:300]},
+        ) from exc
     logger.warning("payment_validation locks released via diagnostics")
     return {"released": True, "locks": released}
 
