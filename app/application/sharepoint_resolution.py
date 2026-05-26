@@ -56,10 +56,16 @@ async def resolve_sharepoint_path(client: GraphApiPort, site_search: str, drive_
 async def resolve_sharepoint_from_env(client: GraphApiPort) -> dict[str, str]:
     site_search = os.getenv("GRAPH_SHAREPOINT_SITE_SEARCH", "").strip()
     file_path = os.getenv("GRAPH_SHAREPOINT_FILE_PATH", "").strip()
-    drive_name = os.getenv("GRAPH_SHAREPOINT_DRIVE_NAME", "").strip()
-    
+    # Fallback de compatibilidad: despliegues legacy usan solo el archivo banco.
     if not file_path:
-        raise GraphConfigError("Missing environment variable: GRAPH_SHAREPOINT_FILE_PATH")
+        file_path = os.getenv("GRAPH_BANK_PAYMENTS_FILE_PATH", "").strip()
+    drive_name = os.getenv("GRAPH_SHAREPOINT_DRIVE_NAME", "").strip()
+
+    if not file_path:
+        raise GraphConfigError(
+            "Missing environment variable: GRAPH_SHAREPOINT_FILE_PATH "
+            "(or GRAPH_BANK_PAYMENTS_FILE_PATH as fallback)"
+        )
     if not site_search:
         raise GraphConfigError("Missing environment variable: GRAPH_SHAREPOINT_SITE_SEARCH")
 
