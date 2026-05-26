@@ -122,7 +122,7 @@ async def queue_workflow_ping(background_tasks: BackgroundTasks) -> dict[str, An
                 status_code=500,
                 detail="JOB_RUNNER_BACKEND=vercel_workflow requiere runner con enqueue_workflow_ping",
             )
-        await enqueue(job_id=job_id)
+        await enqueue(job_id=job_id, background_tasks=background_tasks)
     else:
         bg = BackgroundJobRunner()
         await bg.enqueue_workflow_ping(

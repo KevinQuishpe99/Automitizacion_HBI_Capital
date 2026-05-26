@@ -27,7 +27,7 @@ def test_vercel_json_services_mode_structure() -> None:
     assert api["framework"] == "fastapi"
     assert api["entrypoint"] == "index.py"
     assert api["routePrefix"] == "/"
-    assert api["maxDuration"] == 60
+    assert api["maxDuration"] == 300
     assert api["memory"] == 2048
 
     worker = services["workflows"]

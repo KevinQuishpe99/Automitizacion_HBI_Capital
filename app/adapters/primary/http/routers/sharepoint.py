@@ -1,14 +1,13 @@
 import logging
 import os
 import uuid
-from asyncio import create_task
 from base64 import b64decode, b64encode
 from datetime import datetime, timezone
 from time import perf_counter
 from typing import Any
 
 import httpx
-from fastapi import APIRouter, Body, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Body, HTTPException
 
 from app.adapters.primary.http.deps import GraphClientDep
 from app.application.use_cases.sharepoint_from_env import (
@@ -466,7 +465,10 @@ async def validate_payment_report(graph: GraphClientDep) -> dict:
 
 
 @router.post("/validate-payment-report/queue")
-async def validate_payment_report_queue(graph: GraphClientDep) -> dict:
+async def validate_payment_report_queue(
+    graph: GraphClientDep,
+    background_tasks: BackgroundTasks,
+) -> dict:
     """
     Encola la validación y responde inmediato con job_id para evitar timeout en cliente.
     """
@@ -484,7 +486,7 @@ async def validate_payment_report_queue(graph: GraphClientDep) -> dict:
             "error": None,
         },
     )
-    create_task(_run_validation_job(job_id, graph))
+    background_tasks.add_task(_run_validation_job, job_id, graph)
     logger.info("job %s: encolado validate_payment_report", job_id)
     return {
         "status": "queued",
@@ -521,6 +523,7 @@ async def merge_composite_validado_pdfs_job_status(job_id: str) -> dict:
 @router.post("/merge-composite-validado-pdfs", status_code=202)
 async def post_merge_composite_validado_pdfs(
     graph: GraphClientDep,
+    background_tasks: BackgroundTasks,
     body: MergeCompositeValidadoRequest | None = Body(default=None),
 ) -> dict[str, Any]:
     """
@@ -546,10 +549,11 @@ async def post_merge_composite_validado_pdfs(
             "force_rebuild": payload.force_rebuild,
         },
     )
-    create_task(
-        _run_merge_composite_validado_pdfs_job(
-            job_id, graph, force_rebuild=payload.force_rebuild
-        )
+    background_tasks.add_task(
+        _run_merge_composite_validado_pdfs_job,
+        job_id,
+        graph,
+        force_rebuild=payload.force_rebuild,
     )
     logger.info("job %s: encolado merge_composite_validado_pdfs", job_id)
     return {
@@ -566,6 +570,7 @@ async def post_merge_composite_validado_pdfs(
 @router.post("/notify-validar-extractos-email", status_code=202)
 async def notify_validar_extractos_email(
     graph: GraphClientDep,
+    background_tasks: BackgroundTasks,
     body: NotifyValidarExtractosRequest | None = Body(default=None),
 ) -> dict:
     """
@@ -596,7 +601,7 @@ async def notify_validar_extractos_email(
             "error": None,
         },
     )
-    create_task(_run_notify_validar_extractos_job(job_id, graph, payload))
+    background_tasks.add_task(_run_notify_validar_extractos_job, job_id, graph, payload)
     logger.info("job %s: encolado notify_validar_extractos", job_id)
     return {
         "status": "queued",
@@ -610,7 +615,10 @@ async def notify_validar_extractos_email(
 
 
 @router.post("/ensure-asientos-contables-folders", status_code=202)
-async def post_ensure_asientos_contables_folders(graph: GraphClientDep) -> dict[str, Any]:
+async def post_ensure_asientos_contables_folders(
+    graph: GraphClientDep,
+    background_tasks: BackgroundTasks,
+) -> dict[str, Any]:
     """
     Encola la creación de subcarpetas bajo cada crédito de cada cliente (GRAPH_CLIENTS_BASE_PATH):
     por defecto ``ASIENTOS CONTABLES`` y ``EXTRACTOS`` (si ya existen, no hace nada).
@@ -631,7 +639,7 @@ async def post_ensure_asientos_contables_folders(graph: GraphClientDep) -> dict[
             "error": None,
         },
     )
-    create_task(_run_ensure_asientos_contables_job(job_id, graph))
+    background_tasks.add_task(_run_ensure_asientos_contables_job, job_id, graph)
     logger.info("job %s: encolado ensure_asientos_contables", job_id)
     return {
         "status": "queued",

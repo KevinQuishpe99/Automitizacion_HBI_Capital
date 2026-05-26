@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -258,7 +259,9 @@ def test_workflow_ping_queue_endpoint_workflow_mode(
     enqueued: list[str] = []
 
     class _Runner:
-        async def enqueue_workflow_ping(self, *, job_id: str) -> None:
+        async def enqueue_workflow_ping(
+            self, *, job_id: str, background_tasks: Any = None
+        ) -> None:
             enqueued.append(job_id)
 
     monkeypatch.setenv("JOB_RUNNER_BACKEND", "vercel_workflow")

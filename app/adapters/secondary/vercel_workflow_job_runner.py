@@ -10,12 +10,17 @@ from app.application.job_runner_settings import (
     workflow_amortization_dry_run_name,
     workflow_ping_name,
 )
+from app.application.jobs.amortization_dry_run_fallback import (
+    execute_amortization_dry_run_job_with_graph,
+)
+from app.application.jobs.vercel_workflow_fallback import schedule_workflow_api_fallback
+from app.application.jobs.workflow_ping_job import execute_workflow_ping_job
 
 logger = logging.getLogger(__name__)
 
 
 class VercelWorkflowJobRunner:
-    """Vercel Pro: encola jobs vía ``vercel.workflow.start``."""
+    """Vercel Pro: encola jobs vía ``vercel.workflow.start`` + fallback API si el worker no avanza."""
 
     async def _start_workflow(
         self,
@@ -40,7 +45,10 @@ class VercelWorkflowJobRunner:
             workflow_name,
         )
         run = await start(workflow_fn, job_id=job_id, **kwargs)
-        print(f"WORKFLOW_START_RUN_ID job_id={job_id} wrun={run.run_id} workflow={workflow_name}", flush=True)
+        print(
+            f"WORKFLOW_START_RUN_ID job_id={job_id} wrun={run.run_id} workflow={workflow_name}",
+            flush=True,
+        )
         logger.info(
             "workflow.start after job_id=%s workflow_name=%s workflow_run_id=%s",
             job_id,
@@ -57,7 +65,12 @@ class VercelWorkflowJobRunner:
         jm = JobManager()
         await jm.set_job(job_id, updates)
 
-    async def enqueue_workflow_ping(self, *, job_id: str) -> None:
+    async def enqueue_workflow_ping(
+        self,
+        *,
+        job_id: str,
+        background_tasks: BackgroundTasks | None = None,
+    ) -> None:
         from app.workflows.workflow_ping_workflow import workflow_ping_workflow
 
         print(
@@ -71,6 +84,12 @@ class VercelWorkflowJobRunner:
             kwargs={},
             extra_job_updates={"type": "workflow_ping"},
         )
+        schedule_workflow_api_fallback(
+            background_tasks,
+            job_id=job_id,
+            label="workflow_ping",
+            execute=lambda: execute_workflow_ping_job(job_id),
+        )
 
     async def enqueue_amortization_dry_run(
         self,
@@ -82,7 +101,7 @@ class VercelWorkflowJobRunner:
         historical_file_path: str | None,
         background_tasks: BackgroundTasks | None = None,
     ) -> None:
-        del graph, background_tasks
+        del graph
         from app.workflows.amortization_dry_run_workflow import amortization_dry_run_workflow
 
         await self._start_workflow(
@@ -94,6 +113,17 @@ class VercelWorkflowJobRunner:
                 "merge_manifest_path": merge_manifest_path,
                 "historical_file_path": historical_file_path,
             },
+        )
+        schedule_workflow_api_fallback(
+            background_tasks,
+            job_id=job_id,
+            label="amortization_dry_run",
+            execute=lambda: execute_amortization_dry_run_job_with_graph(
+                job_id,
+                report_date_iso=report_date_iso,
+                merge_manifest_path=merge_manifest_path,
+                historical_file_path=historical_file_path,
+            ),
         )
 
 

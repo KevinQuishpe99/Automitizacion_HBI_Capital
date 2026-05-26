@@ -8,7 +8,7 @@
       "framework": "fastapi",
       "entrypoint": "index.py",
       "routePrefix": "/",
-      "maxDuration": 60,
+      "maxDuration": 300,
       "memory": 2048
     },
     "workflows": {
