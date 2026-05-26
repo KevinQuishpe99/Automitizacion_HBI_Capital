@@ -211,7 +211,7 @@ async def validate_payment_report(graph: GraphClientDep) -> dict:
         raise HTTPException(status_code=400, detail=f"Validation failed: {exc}") from exc
 
 
-@router.post("/validate-payment-report/queue")
+@router.post("/validate-payment-report/queue", status_code=202)
 async def validate_payment_report_queue(
     graph: GraphClientDep,
     background_tasks: BackgroundTasks,
