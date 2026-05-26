@@ -1,6 +1,5 @@
 import logging
 import asyncio
-import os
 from datetime import date, datetime, timezone
 from time import perf_counter
 from typing import Any
@@ -13,12 +12,6 @@ from app.application.job_status_enrichment import enrich_job_for_http_response
 from app.application.job_manager import JobManager
 from app.application.job_runner_factory import get_job_runner
 from app.application.jobs.amortization_dry_run_job import execute_amortization_dry_run_job
-from app.application.jobs.payment_validation_finalize_job import (
-    execute_payment_validation_finalize_job,
-)
-from app.application.jobs.payment_validation_generate_job import (
-    execute_payment_validation_generate_job,
-)
 from app.application.payment_validation_locks import (
     build_lock_conflict_detail,
     cleanup_expired_payment_validation_locks,
@@ -143,29 +136,15 @@ async def queue_generate(
         "updated_at": _utc_now_iso(),
     })
 
-    use_vercel_workflows = (
-        os.getenv("JOB_RUNNER_BACKEND", "").strip().lower() == "vercel_workflow"
-        and os.getenv("VERCEL_WORKFLOWS_ENABLED", "").strip().lower() == "true"
-    )
-
     try:
-        if use_vercel_workflows:
-            background_tasks.add_task(
-                execute_payment_validation_generate_job,
-                job_id,
-                graph,
-                process_date_iso=process_date.isoformat(),
-            )
-            logger.info("job %s: generate encolado (BackgroundTasks)", job_id)
-        else:
-            runner = get_job_runner()
-            await runner.enqueue_payment_validation_generate(
-                job_id=job_id,
-                graph=graph,
-                process_date_iso=process_date.isoformat(),
-                background_tasks=background_tasks,
-            )
-            logger.info("job %s: generate encolado (%s)", job_id, type(runner).__name__)
+        runner = get_job_runner()
+        await runner.enqueue_payment_validation_generate(
+            job_id=job_id,
+            graph=graph,
+            process_date_iso=process_date.isoformat(),
+            background_tasks=background_tasks,
+        )
+        logger.info("job %s: generate encolado (%s)", job_id, type(runner).__name__)
     except Exception:
         await jm.finish_generate()
         raise
@@ -215,33 +194,17 @@ async def queue_finalize(
         "updated_at": _utc_now_iso(),
     })
 
-    use_vercel_workflows = (
-        os.getenv("JOB_RUNNER_BACKEND", "").strip().lower() == "vercel_workflow"
-        and os.getenv("VERCEL_WORKFLOWS_ENABLED", "").strip().lower() == "true"
-    )
-
     try:
-        if use_vercel_workflows:
-            background_tasks.add_task(
-                execute_payment_validation_finalize_job,
-                job_id,
-                graph,
-                validation_file=validation_file,
-                validation_file_path=validation_file_path,
-                process_date_iso=process_date.isoformat(),
-            )
-            logger.info("job %s: finalize encolado (BackgroundTasks)", job_id)
-        else:
-            runner = get_job_runner()
-            await runner.enqueue_payment_validation_finalize(
-                job_id=job_id,
-                graph=graph,
-                validation_file=validation_file,
-                validation_file_path=validation_file_path,
-                process_date_iso=process_date.isoformat(),
-                background_tasks=background_tasks,
-            )
-            logger.info("job %s: finalize encolado (%s)", job_id, type(runner).__name__)
+        runner = get_job_runner()
+        await runner.enqueue_payment_validation_finalize(
+            job_id=job_id,
+            graph=graph,
+            validation_file=validation_file,
+            validation_file_path=validation_file_path,
+            process_date_iso=process_date.isoformat(),
+            background_tasks=background_tasks,
+        )
+        logger.info("job %s: finalize encolado (%s)", job_id, type(runner).__name__)
     except Exception:
         await jm.finish_finalize()
         raise

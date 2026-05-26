@@ -297,11 +297,14 @@ def test_amortization_dry_run_failed_enrichment_manifest_not_found():
     assert out["error"]["error_code"] == "merge_manifest_not_found"
 
 
-def test_generate_queue_does_not_use_vercel_workflow_runner(client, monkeypatch) -> None:
-    """vercel_workflow afecta amortization dry-run/apply; generate sigue con BackgroundTasks."""
+def test_generate_queue_uses_job_runner_on_vercel(client, monkeypatch) -> None:
+    """generate/finalize usan get_job_runner (workflow + fallback API), igual que amortization."""
 
-    def _fail_if_called():
-        raise AssertionError("get_job_runner no debe usarse en generate/finalize")
+    called: list[str] = []
+
+    class _StubRunner:
+        async def enqueue_payment_validation_generate(self, **kwargs) -> None:
+            called.append("generate")
 
     monkeypatch.setenv("JOB_RUNNER_BACKEND", "vercel_workflow")
     monkeypatch.setenv("VERCEL_WORKFLOWS_ENABLED", "true")
@@ -309,9 +312,10 @@ def test_generate_queue_does_not_use_vercel_workflow_runner(client, monkeypatch)
     monkeypatch.setattr(
         payment_validation_router,
         "get_job_runner",
-        _fail_if_called,
+        lambda: _StubRunner(),
     )
 
     res = client.post("/graph/sharepoint/payment-validation/generate/queue")
     assert res.status_code == 202
     assert res.json()["status"] == "queued"
+    assert called == ["generate"]

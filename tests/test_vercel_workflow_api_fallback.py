@@ -52,12 +52,18 @@ def test_run_job_if_still_queued_executes_when_stuck() -> None:
     asyncio.run(_run())
 
 
-def test_run_job_if_still_queued_skips_when_not_queued() -> None:
+def test_run_job_if_still_queued_skips_when_running_recent() -> None:
+    from datetime import datetime, timedelta, timezone
+
     from app.application.job_store_factory import get_job_store
 
     async def _run() -> None:
         store = get_job_store()
-        await store.create_job("j2", {"job_id": "j2", "status": "running"})
+        now = datetime.now(timezone.utc).isoformat()
+        await store.create_job(
+            "j2",
+            {"job_id": "j2", "status": "running", "started_at": now},
+        )
         executed: list[str] = []
 
         async def execute() -> None:
@@ -65,5 +71,32 @@ def test_run_job_if_still_queued_skips_when_not_queued() -> None:
 
         await run_job_if_still_queued("j2", execute=execute, label="test", delay_seconds=0.05)
         assert executed == []
+
+    asyncio.run(_run())
+
+
+def test_run_job_if_still_queued_marks_stale_running_failed(monkeypatch: pytest.MonkeyPatch) -> None:
+    from datetime import datetime, timedelta, timezone
+
+    from app.application.job_store_factory import get_job_store
+
+    monkeypatch.setenv("VERCEL_WORKFLOW_STALE_RUNNING_SECONDS", "30")
+
+    async def _run() -> None:
+        store = get_job_store()
+        old = (datetime.now(timezone.utc) - timedelta(seconds=120)).isoformat()
+        await store.create_job(
+            "j3",
+            {"job_id": "j3", "status": "running", "started_at": old},
+        )
+
+        async def execute() -> None:
+            raise AssertionError("no debe ejecutar si ya estaba running estancado")
+
+        await run_job_if_still_queued("j3", execute=execute, label="finalize", delay_seconds=0.05)
+        job = await store.get_job("j3")
+        assert job is not None
+        assert job["status"] == "failed"
+        assert job["error"]["error_code"] == "job_stuck_running"
 
     asyncio.run(_run())
