@@ -15,7 +15,8 @@ def job_runner_backend() -> str:
 
     Local/Render: omitir o ``background``.
     Vercel (dry-run workflow): ``vercel_workflow`` + ``VERCEL_WORKFLOWS_ENABLED=true``.
-    Solo afecta ``POST .../amortization/dry-run/queue``; generate/finalize/apply usan BackgroundTasks.
+    En Vercel afecta ``amortization/dry-run/queue`` y ``amortization/apply/queue``;
+    generate/finalize siguen con BackgroundTasks.
     """
     explicit = (os.getenv("JOB_RUNNER_BACKEND") or "").strip().lower()
     if explicit in ("background", "vercel_workflow"):
@@ -36,6 +37,13 @@ def workflow_amortization_dry_run_name() -> str:
 
 def workflow_ping_name() -> str:
     return (os.getenv("WORKFLOW_PING_NAME") or "").strip() or "workflow_ping_workflow"
+
+
+def workflow_amortization_apply_name() -> str:
+    return (
+        (os.getenv("WORKFLOW_AMORTIZATION_APPLY_NAME") or "").strip()
+        or "amortization_apply_workflow"
+    )
 
 
 def is_vercel_runtime() -> bool:

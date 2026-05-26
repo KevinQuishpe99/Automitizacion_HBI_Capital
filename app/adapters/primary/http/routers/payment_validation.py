@@ -28,7 +28,6 @@ from app.application.use_cases.setup_merge_control_workbook import (
     MergeControlSetupError,
     setup_merge_control_workbook,
 )
-from app.application.use_cases.amortization_fill_apply import run_amortization_fill_apply
 from app.domain.exceptions import GraphConfigError
 
 router = APIRouter(prefix="/graph/sharepoint/payment-validation", tags=["payment-validation"])
@@ -161,90 +160,6 @@ async def _run_amortization_dry_run_job(
         merge_manifest_path=merge_manifest_path,
         historical_file_path=historical_file_path,
     )
-
-
-async def _run_amortization_apply_job(
-    job_id: str,
-    graph: GraphClientDep,
-    *,
-    report_date_iso: str | None,
-    merge_manifest_path: str | None,
-    historical_file_path: str | None,
-) -> None:
-    jm = JobManager()
-    await jm.set_job(
-        job_id,
-        {
-            "status": "running",
-            "started_at": _utc_now_iso(),
-            "updated_at": _utc_now_iso(),
-        },
-    )
-    logger.info("job %s: amortization_apply iniciado", job_id)
-    started = perf_counter()
-    try:
-        result = await run_amortization_fill_apply(
-            graph,
-            report_date_iso=report_date_iso,
-            merge_manifest_path=merge_manifest_path,
-            historical_file_path=historical_file_path,
-        )
-        elapsed_ms = round((perf_counter() - started) * 1000, 2)
-        await jm.set_job(
-            job_id,
-            {
-                "status": "completed",
-                "finished_at": _utc_now_iso(),
-                "updated_at": _utc_now_iso(),
-                "result": {**result, "elapsed_ms": elapsed_ms},
-                "error": None,
-            },
-        )
-        logger.info("job %s: amortization_apply completado en %.2fms", job_id, elapsed_ms)
-    except ValueError as exc:
-        msg = str(exc)
-        code = msg.split("|", 1)[0].strip() if "|" in msg else msg.strip()
-        await jm.set_job(
-            job_id,
-            {
-                "status": "failed",
-                "finished_at": _utc_now_iso(),
-                "updated_at": _utc_now_iso(),
-                "result": None,
-                "error": {
-                    "type": "ValueError",
-                    "message": msg,
-                    "error_code": code,
-                },
-            },
-        )
-    except GraphConfigError as exc:
-        await jm.set_job(
-            job_id,
-            {
-                "status": "failed",
-                "finished_at": _utc_now_iso(),
-                "updated_at": _utc_now_iso(),
-                "result": None,
-                "error": {
-                    "type": "GraphConfigError",
-                    "message": str(exc),
-                    "error_code": "graph_config_error",
-                },
-            },
-        )
-    except Exception as exc:
-        await jm.set_job(
-            job_id,
-            {
-                "status": "failed",
-                "finished_at": _utc_now_iso(),
-                "updated_at": _utc_now_iso(),
-                "result": None,
-                "error": {"type": type(exc).__name__, "message": str(exc)},
-            },
-        )
-        logger.exception("job %s: amortization_apply falló: %s", job_id, exc)
 
 
 # ─── Endpoints ────────────────────────────────────────────────────────────────
@@ -509,27 +424,16 @@ async def queue_amortization_apply(
         },
     )
 
-    background_tasks.add_task(
-        _run_amortization_apply_job,
-        job_id,
-        graph,
+    runner = get_job_runner()
+    await runner.enqueue_amortization_apply(
+        job_id=job_id,
+        graph=graph,
         report_date_iso=report_date,
         merge_manifest_path=manifest_path,
         historical_file_path=historical_path,
+        background_tasks=background_tasks,
     )
-    schedule_workflow_api_fallback(
-        background_tasks,
-        job_id=job_id,
-        label="amortization_apply",
-        execute=lambda: _run_amortization_apply_job(
-            job_id,
-            graph,
-            report_date_iso=report_date,
-            merge_manifest_path=manifest_path,
-            historical_file_path=historical_path,
-        ),
-    )
-    logger.info("job %s: amortization_apply encolado", job_id)
+    logger.info("job %s: amortization_apply encolado (%s)", job_id, type(runner).__name__)
 
     return {"job_id": job_id, "status": "queued"}
 

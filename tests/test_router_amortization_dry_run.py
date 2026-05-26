@@ -298,10 +298,10 @@ def test_amortization_dry_run_failed_enrichment_manifest_not_found():
 
 
 def test_generate_queue_does_not_use_vercel_workflow_runner(client, monkeypatch) -> None:
-    """vercel_workflow solo afecta dry-run; generate sigue con BackgroundTasks."""
+    """vercel_workflow afecta amortization dry-run/apply; generate sigue con BackgroundTasks."""
 
     def _fail_if_called():
-        raise AssertionError("get_job_runner no debe usarse en generate/finalize/apply")
+        raise AssertionError("get_job_runner no debe usarse en generate/finalize")
 
     monkeypatch.setenv("JOB_RUNNER_BACKEND", "vercel_workflow")
     monkeypatch.setenv("VERCEL_WORKFLOWS_ENABLED", "true")

@@ -7,8 +7,12 @@ from fastapi import BackgroundTasks
 
 from app.application.job_manager import JobManager
 from app.application.job_runner_settings import (
+    workflow_amortization_apply_name,
     workflow_amortization_dry_run_name,
     workflow_ping_name,
+)
+from app.application.jobs.amortization_apply_fallback import (
+    execute_amortization_apply_job_with_graph,
 )
 from app.application.jobs.amortization_dry_run_fallback import (
     execute_amortization_dry_run_job_with_graph,
@@ -119,6 +123,46 @@ class VercelWorkflowJobRunner:
             job_id=job_id,
             label="amortization_dry_run",
             execute=lambda: execute_amortization_dry_run_job_with_graph(
+                job_id,
+                report_date_iso=report_date_iso,
+                merge_manifest_path=merge_manifest_path,
+                historical_file_path=historical_file_path,
+            ),
+        )
+
+    async def enqueue_amortization_apply(
+        self,
+        *,
+        job_id: str,
+        graph: Any,
+        report_date_iso: str | None,
+        merge_manifest_path: str | None,
+        historical_file_path: str | None,
+        background_tasks: BackgroundTasks | None = None,
+    ) -> None:
+        del graph
+        from app.workflows.amortization_apply_workflow import amortization_apply_workflow
+
+        print(
+            f"WORKFLOW_START_APPLY job_id={job_id} workflow={workflow_amortization_apply_name()}",
+            flush=True,
+        )
+        await self._start_workflow(
+            workflow_fn=amortization_apply_workflow,
+            job_id=job_id,
+            workflow_name=workflow_amortization_apply_name(),
+            kwargs={
+                "report_date_iso": report_date_iso,
+                "merge_manifest_path": merge_manifest_path,
+                "historical_file_path": historical_file_path,
+            },
+            extra_job_updates={"type": "amortization_apply"},
+        )
+        schedule_workflow_api_fallback(
+            background_tasks,
+            job_id=job_id,
+            label="amortization_apply",
+            execute=lambda: execute_amortization_apply_job_with_graph(
                 job_id,
                 report_date_iso=report_date_iso,
                 merge_manifest_path=merge_manifest_path,

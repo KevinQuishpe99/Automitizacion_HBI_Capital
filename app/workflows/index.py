@@ -19,7 +19,12 @@ print("AMORTIZATION_DRY_RUN_IMPORTED", flush=True)
 
 from app.workflows import workflow_ping_workflow as _workflow_ping_workflow
 
+from app.workflows import amortization_apply_workflow as _amortization_apply_workflow
+
+print("AMORTIZATION_APPLY_WORKFLOW_REGISTERED", flush=True)
+
 __all__ = [
     "_amortization_dry_run_workflow",
+    "_amortization_apply_workflow",
     "_workflow_ping_workflow",
 ]

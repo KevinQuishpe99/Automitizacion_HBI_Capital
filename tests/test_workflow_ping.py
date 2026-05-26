@@ -38,6 +38,7 @@ def test_workflow_entrypoint_imports_both_workflows() -> None:
     index = importlib.import_module("app.workflows.index")
     assert hasattr(index, "_amortization_dry_run_workflow")
     assert hasattr(index, "_workflow_ping_workflow")
+    assert hasattr(index, "_amortization_apply_workflow")
     from app.workflows.amortization_dry_run_workflow import amortization_dry_run_workflow
     from app.workflows.workflow_ping_workflow import workflow_ping_workflow
 
