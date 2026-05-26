@@ -11,6 +11,7 @@ from time import perf_counter
 from typing import Any
 
 from app.application.job_manager import JobManager
+from app.application.jobs.job_run_guard import JobExecutionSkipped, begin_job_execution
 from app.application.use_cases.amortization_fill_apply import run_amortization_fill_apply
 from app.domain.exceptions import GraphConfigError
 
@@ -34,15 +35,12 @@ async def execute_amortization_apply_job(
     """Marca running → apply → complete/fail en JobStore."""
     print(f"AMORTIZATION_APPLY_SET_RUNNING job_id={job_id}", flush=True)
     jm = JobManager()
-    await jm.set_job(
-        job_id,
-        {
-            "type": "amortization_apply",
-            "status": "running",
-            "started_at": _utc_now_iso(),
-            "updated_at": _utc_now_iso(),
-        },
-    )
+    try:
+        await begin_job_execution(
+            jm, job_id, extra_updates={"type": "amortization_apply"}
+        )
+    except JobExecutionSkipped:
+        return
     logger.info("job %s: amortization_apply iniciado", job_id)
     started = perf_counter()
     try:

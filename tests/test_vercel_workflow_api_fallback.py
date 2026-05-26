@@ -100,3 +100,35 @@ def test_run_job_if_still_queued_marks_stale_running_failed(monkeypatch: pytest.
         assert job["error"]["error_code"] == "job_stuck_running"
 
     asyncio.run(_run())
+
+
+def test_run_job_if_still_queued_skips_when_workflow_picks_up(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.application.job_store_factory import get_job_store
+
+    monkeypatch.setenv("VERCEL_WORKFLOW_API_FALLBACK_WORKFLOW_WAIT_SECONDS", "2")
+    monkeypatch.setenv("VERCEL_WORKFLOW_API_FALLBACK_POLL_SECONDS", "0.2")
+
+    async def _run() -> None:
+        store = get_job_store()
+        await store.create_job(
+            "j4",
+            {
+                "job_id": "j4",
+                "status": "queued",
+                "workflow_run_id": "wrun_test",
+            },
+        )
+        executed: list[str] = []
+
+        async def execute() -> None:
+            executed.append("ok")
+
+        async def advance_to_running() -> None:
+            await asyncio.sleep(0.35)
+            await store.update_job("j4", {"status": "running"})
+
+        asyncio.create_task(advance_to_running())
+        await run_job_if_still_queued("j4", execute=execute, label="generate", delay_seconds=0.05)
+        assert executed == []
+
+    asyncio.run(_run())

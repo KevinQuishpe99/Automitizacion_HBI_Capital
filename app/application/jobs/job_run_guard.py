@@ -12,6 +12,12 @@ logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
 
+_TERMINAL_STATUSES = frozenset({"completed", "failed"})
+
+
+class JobExecutionSkipped(Exception):
+    """Otra instancia ya terminó o está ejecutando este job (workflow + fallback)."""
+
 
 def _utc_now_iso() -> str:
     from datetime import datetime, timezone
@@ -27,6 +33,74 @@ def job_step_timeout_seconds(job_label: str) -> float:
         return max(30.0, float(raw))
     except ValueError:
         return 900.0
+
+
+def _job_has_success_payload(job: dict[str, Any]) -> bool:
+    if job.get("result"):
+        return True
+    if job.get("result_summary"):
+        return True
+    return bool(job.get("result_ref"))
+
+
+async def begin_job_execution(
+    job_manager: Any,
+    job_id: str,
+    *,
+    extra_updates: dict[str, Any] | None = None,
+) -> None:
+    """
+    Pasa ``queued`` → ``running`` solo si nadie más está ejecutando o terminó.
+
+    Evita que workflow y fallback API pisen un ``completed`` con ``running``.
+    """
+    running_updates: dict[str, Any] = {
+        "status": "running",
+        "started_at": _utc_now_iso(),
+        "updated_at": _utc_now_iso(),
+    }
+    if extra_updates:
+        running_updates.update(extra_updates)
+
+    job = await job_manager.get_job(job_id)
+    if job is None:
+        await job_manager.set_job(job_id, running_updates)
+        return
+
+    status = str(job.get("status") or "")
+    if status in _TERMINAL_STATUSES:
+        raise JobExecutionSkipped(f"job already {status}")
+    if status == "running":
+        raise JobExecutionSkipped("job already running")
+    if status != "queued":
+        raise JobExecutionSkipped(f"unexpected status {status}")
+
+    await job_manager.set_job(job_id, running_updates)
+
+
+async def reconcile_job_terminal(job_manager: Any, job_id: str) -> bool:
+    """True si el job ya está terminal o tiene resultado persistido."""
+    job = await job_manager.get_job(job_id)
+    if not job:
+        return False
+    if str(job.get("status") or "") in _TERMINAL_STATUSES:
+        return True
+    if str(job.get("status") or "") == "running" and _job_has_success_payload(job):
+        await job_manager.set_job(
+            job_id,
+            {
+                "status": "completed",
+                "finished_at": job.get("finished_at") or _utc_now_iso(),
+                "updated_at": _utc_now_iso(),
+                "error": None,
+            },
+        )
+        logger.warning(
+            "job %s: reconciliado a completed (tenía result pero status running)",
+            job_id,
+        )
+        return True
+    return False
 
 
 async def run_with_timeout(
@@ -49,6 +123,8 @@ async def fail_job_if_still_running(
     reason: str = "job_aborted_before_terminal_status",
 ) -> None:
     """Marca ``failed`` si el job sigue en ``running`` (p. ej. proceso serverless cortado)."""
+    if await reconcile_job_terminal(job_manager, job_id):
+        return
     job = await job_manager.get_job(job_id)
     if job is None or job.get("status") != "running":
         return
@@ -83,32 +159,70 @@ async def run_job_body(
     terminal = False
     try:
         await execute()
-        job = await job_manager.get_job(job_id)
-        if job and job.get("status") in ("completed", "failed"):
+        if await reconcile_job_terminal(job_manager, job_id):
             terminal = True
+        else:
+            job = await job_manager.get_job(job_id)
+            if job and job.get("status") in _TERMINAL_STATUSES:
+                terminal = True
+    except JobExecutionSkipped as exc:
+        if await reconcile_job_terminal(job_manager, job_id):
+            terminal = True
+        else:
+            job = await job_manager.get_job(job_id)
+            if job and str(job.get("status") or "") == "running":
+                terminal = True
+                logger.info(
+                    "job %s (%s): ejecución duplicada omitida (%s), otro runner activo",
+                    job_id,
+                    job_label,
+                    exc,
+                )
+            else:
+                terminal = True
+                logger.info(
+                    "job %s (%s): ejecución omitida (%s)",
+                    job_id,
+                    job_label,
+                    exc,
+                )
     except Exception as exc:
-        try:
-            await job_manager.set_job(
-                job_id,
-                {
-                    "status": "failed",
-                    "finished_at": _utc_now_iso(),
-                    "updated_at": _utc_now_iso(),
-                    "error": {
-                        "type": type(exc).__name__,
-                        "message": str(exc),
-                    },
-                },
-            )
+        if await reconcile_job_terminal(job_manager, job_id):
             terminal = True
-        except Exception:
-            logger.exception("job %s: no se pudo persistir failed", job_id)
-        logger.error("job %s (%s) falló: %s: %s", job_id, job_label, type(exc).__name__, exc)
+            logger.warning(
+                "job %s (%s): excepción ignorada, job ya terminal: %s",
+                job_id,
+                job_label,
+                exc,
+            )
+        else:
+            try:
+                await job_manager.set_job(
+                    job_id,
+                    {
+                        "status": "failed",
+                        "finished_at": _utc_now_iso(),
+                        "updated_at": _utc_now_iso(),
+                        "error": {
+                            "type": type(exc).__name__,
+                            "message": str(exc),
+                        },
+                    },
+                )
+                terminal = True
+            except Exception:
+                logger.exception("job %s: no se pudo persistir failed", job_id)
+            logger.error(
+                "job %s (%s) falló: %s: %s", job_id, job_label, type(exc).__name__, exc
+            )
     finally:
         try:
             await finish_lock()
         except Exception:
             logger.exception("job %s: finish_lock falló", job_id)
+        if not terminal:
+            if await reconcile_job_terminal(job_manager, job_id):
+                terminal = True
         if not terminal:
             await fail_job_if_still_running(
                 job_manager,

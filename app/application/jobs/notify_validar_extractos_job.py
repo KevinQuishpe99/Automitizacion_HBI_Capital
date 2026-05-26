@@ -6,7 +6,9 @@ import logging
 from time import perf_counter
 from typing import Any
 
+from app.application.job_manager import JobManager
 from app.application.job_store_factory import get_job_store
+from app.application.jobs.job_run_guard import JobExecutionSkipped, begin_job_execution
 from app.application.use_cases.send_validar_extractos_notification import (
     send_validar_extractos_notification_email,
 )
@@ -38,15 +40,15 @@ async def execute_notify_validar_extractos_job(
         to=to_override,
         cc=cc_override,
     )
-    await _set_job(
-        job_id,
-        {
-            "type": "notify_validar_extractos",
-            "status": "running",
-            "started_at": _utc_now_iso(),
-            "updated_at": _utc_now_iso(),
-        },
-    )
+    jm = JobManager()
+    try:
+        await begin_job_execution(
+            jm,
+            job_id,
+            extra_updates={"type": "notify_validar_extractos"},
+        )
+    except JobExecutionSkipped:
+        return
     logger.info("job %s: notify_validar_extractos iniciado", job_id)
     started_ts = perf_counter()
     try:

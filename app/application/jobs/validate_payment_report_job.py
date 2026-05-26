@@ -6,7 +6,9 @@ import logging
 from time import perf_counter
 from typing import Any
 
+from app.application.job_manager import JobManager
 from app.application.job_store_factory import get_job_store
+from app.application.jobs.job_run_guard import JobExecutionSkipped, begin_job_execution
 from app.application.use_cases.validate_payment_report import validate_payment_report_and_replace_excel
 
 logger = logging.getLogger(__name__)
@@ -23,14 +25,11 @@ async def _set_job(job_id: str, updates: dict[str, Any]) -> None:
 
 
 async def execute_validate_payment_report_job(job_id: str, graph: Any) -> None:
-    await _set_job(
-        job_id,
-        {
-            "status": "running",
-            "started_at": _utc_now_iso(),
-            "updated_at": _utc_now_iso(),
-        },
-    )
+    jm = JobManager()
+    try:
+        await begin_job_execution(jm, job_id)
+    except JobExecutionSkipped:
+        return
     logger.info("job %s: validate_payment_report iniciado", job_id)
     started_ts = perf_counter()
     try:

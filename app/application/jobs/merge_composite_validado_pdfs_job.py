@@ -6,7 +6,9 @@ import logging
 from time import perf_counter
 from typing import Any
 
+from app.application.job_manager import JobManager
 from app.application.job_store_factory import get_job_store
+from app.application.jobs.job_run_guard import JobExecutionSkipped, begin_job_execution
 from app.application.use_cases.merge_composite_validado_pdfs import merge_composite_validado_pdfs
 
 logger = logging.getLogger(__name__)
@@ -28,15 +30,15 @@ async def execute_merge_composite_validado_pdfs_job(
     *,
     force_rebuild: bool = False,
 ) -> None:
-    await _set_job(
-        job_id,
-        {
-            "type": "merge_composite_validado_pdfs",
-            "status": "running",
-            "started_at": _utc_now_iso(),
-            "updated_at": _utc_now_iso(),
-        },
-    )
+    jm = JobManager()
+    try:
+        await begin_job_execution(
+            jm,
+            job_id,
+            extra_updates={"type": "merge_composite_validado_pdfs"},
+        )
+    except JobExecutionSkipped:
+        return
     logger.info("job %s: merge_composite_validado_pdfs iniciado", job_id)
     started_ts = perf_counter()
     try:

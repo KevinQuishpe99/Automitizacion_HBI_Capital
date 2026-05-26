@@ -6,7 +6,9 @@ import logging
 import os
 
 from app.application.job_runner_settings import job_runner_backend, vercel_workflows_enabled
+from app.application.job_manager import JobManager
 from app.application.job_store_factory import get_job_store
+from app.application.jobs.job_run_guard import JobExecutionSkipped, begin_job_execution
 from app.application.job_store_settings import has_blob_token, job_store_backend
 from app.application.jobs.workflow_ping_markers import write_marker
 
@@ -46,17 +48,15 @@ async def execute_workflow_ping_job(job_id: str) -> None:
     await write_marker(job_id, "entered")
 
     store = get_job_store()
+    jm = JobManager()
     try:
         print(f"WORKFLOW_PING_SET_RUNNING job_id={job_id}", flush=True)
-        await store.update_job(
-            job_id,
-            {
-                "type": "workflow_ping",
-                "status": "running",
-                "started_at": _utc_now_iso(),
-                "updated_at": _utc_now_iso(),
-            },
-        )
+        try:
+            await begin_job_execution(
+                jm, job_id, extra_updates={"type": "workflow_ping"}
+            )
+        except JobExecutionSkipped:
+            return
         await write_marker(job_id, "running")
         logger.info("workflow_ping updating running job_id=%s store=%s", job_id, type(store).__name__)
 

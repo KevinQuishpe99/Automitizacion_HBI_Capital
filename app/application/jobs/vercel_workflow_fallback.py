@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_DELAY_SECONDS = 12.0
 _DEFAULT_POLL_INTERVAL_SECONDS = 2.0
+_DEFAULT_WORKFLOW_WAIT_SECONDS = 30.0
 _TERMINAL_STATUSES = frozenset({"completed", "failed"})
 
 
@@ -44,6 +45,27 @@ def workflow_api_fallback_delay_seconds() -> float:
         return max(3.0, float(raw))
     except ValueError:
         return _DEFAULT_DELAY_SECONDS
+
+
+def workflow_api_fallback_poll_interval_seconds() -> float:
+    raw = (os.getenv("VERCEL_WORKFLOW_API_FALLBACK_POLL_SECONDS") or "").strip()
+    if not raw:
+        return _DEFAULT_POLL_INTERVAL_SECONDS
+    try:
+        return max(1.0, float(raw))
+    except ValueError:
+        return _DEFAULT_POLL_INTERVAL_SECONDS
+
+
+def workflow_api_fallback_workflow_wait_seconds() -> float:
+    """Tras el delay inicial, esperar a que el worker pase queued→running si hay workflow_run_id."""
+    raw = (os.getenv("VERCEL_WORKFLOW_API_FALLBACK_WORKFLOW_WAIT_SECONDS") or "").strip()
+    if not raw:
+        return _DEFAULT_WORKFLOW_WAIT_SECONDS
+    try:
+        return max(0.0, float(raw))
+    except ValueError:
+        return _DEFAULT_WORKFLOW_WAIT_SECONDS
 
 
 def workflow_stale_running_seconds() -> float:
@@ -103,6 +125,43 @@ async def _mark_stale_running_failed(job_id: str, *, label: str, stale_s: float)
     )
 
 
+async def _wait_for_workflow_worker_pickup(
+    job_id: str,
+    *,
+    label: str,
+    store: Any,
+) -> bool:
+    """
+    True si conviene omitir el fallback (el worker avanzó o el job terminó).
+    """
+    wait_s = workflow_api_fallback_workflow_wait_seconds()
+    if wait_s <= 0:
+        return False
+    interval = workflow_api_fallback_poll_interval_seconds()
+    polls = max(1, int(wait_s / interval))
+    for _ in range(polls):
+        await asyncio.sleep(interval)
+        job = await store.get_job(job_id)
+        if job is None:
+            return True
+        status = str(job.get("status") or "")
+        if status in _TERMINAL_STATUSES:
+            print(
+                f"WORKFLOW_API_FALLBACK_SKIP job_id={job_id} label={label} "
+                f"status={status} (workflow finished during wait)",
+                flush=True,
+            )
+            return True
+        if status == "running":
+            print(
+                f"WORKFLOW_API_FALLBACK_SKIP job_id={job_id} label={label} "
+                f"status=running (worker picked up)",
+                flush=True,
+            )
+            return True
+    return False
+
+
 async def run_job_if_still_queued(
     job_id: str,
     *,
@@ -155,6 +214,21 @@ async def run_job_if_still_queued(
             flush=True,
         )
         return
+
+    if job.get("workflow_run_id"):
+        if await _wait_for_workflow_worker_pickup(job_id, label=label, store=store):
+            return
+        job = await store.get_job(job_id)
+        if job is None:
+            return
+        status = str(job.get("status") or "")
+        if status in _TERMINAL_STATUSES or status == "running":
+            print(
+                f"WORKFLOW_API_FALLBACK_SKIP job_id={job_id} label={label} "
+                f"status={status} after workflow wait",
+                flush=True,
+            )
+            return
 
     print(
         f"WORKFLOW_API_FALLBACK_RUN job_id={job_id} label={label} delay_s={delay}",

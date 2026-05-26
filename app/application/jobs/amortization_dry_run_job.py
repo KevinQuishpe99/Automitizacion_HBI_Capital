@@ -11,6 +11,7 @@ from time import perf_counter
 from typing import Any
 
 from app.application.job_manager import JobManager
+from app.application.jobs.job_run_guard import JobExecutionSkipped, begin_job_execution
 from app.application.use_cases.amortization_fill_dry_run import run_amortization_fill_dry_run
 from app.domain.exceptions import GraphConfigError
 
@@ -37,14 +38,10 @@ async def execute_amortization_dry_run_job(
         job_id,
     )
     jm = JobManager()
-    await jm.set_job(
-        job_id,
-        {
-            "status": "running",
-            "started_at": _utc_now_iso(),
-            "updated_at": _utc_now_iso(),
-        },
-    )
+    try:
+        await begin_job_execution(jm, job_id)
+    except JobExecutionSkipped:
+        return
     logger.info("job %s: amortization_dry_run iniciado", job_id)
     started = perf_counter()
     try:
