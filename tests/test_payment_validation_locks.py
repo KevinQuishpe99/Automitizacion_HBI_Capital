@@ -130,21 +130,44 @@ def test_expired_finalize_lock_does_not_block_generate():
     asyncio.run(run())
 
 
+def test_cleanup_removes_legacy_24h_finalize_lock():
+    async def run() -> None:
+        store = MemoryJobStore()
+        configure_job_store(store)
+        created = datetime.now(timezone.utc)
+        expires = created + timedelta(hours=24)
+        store._locks[_LOCK_FINALIZE] = {
+            "holder": _LOCK_HOLDER,
+            "created_at": created.isoformat(),
+            "expires_at": expires.isoformat(),
+        }
+        result = await cleanup_expired_payment_validation_locks()
+        assert _LOCK_FINALIZE in result["cleaned"]
+        assert result["reasons"][_LOCK_FINALIZE] == "legacy_ttl_exceeded"
+        assert await store.is_lock_held(_LOCK_FINALIZE) is False
+        jm = JobManager()
+        assert await jm.try_start_generate() is True
+        await jm.finish_generate()
+
+    asyncio.run(run())
+
+
 def test_cleanup_expired_removes_only_expired():
     async def run() -> None:
         store = MemoryJobStore()
         configure_job_store(store)
-        past = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
-        future = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+        now = datetime.now(timezone.utc)
+        past = (now - timedelta(hours=1)).isoformat()
         store._locks[_LOCK_FINALIZE] = {
             "holder": _LOCK_HOLDER,
             "created_at": past,
             "expires_at": past,
         }
+        # TTL vigente (900 s), no legacy
         store._locks[_LOCK_GENERATE] = {
             "holder": _LOCK_HOLDER,
-            "created_at": datetime.now(timezone.utc).isoformat(),
-            "expires_at": future,
+            "created_at": now.isoformat(),
+            "expires_at": (now + timedelta(seconds=900)).isoformat(),
         }
         result = await cleanup_expired_payment_validation_locks()
         assert _LOCK_FINALIZE in result["cleaned"]

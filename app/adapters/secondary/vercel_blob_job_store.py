@@ -297,11 +297,16 @@ class VercelBlobJobStore:
         return await self._blob.get_json(_lock_path(key))
 
     async def cleanup_expired_lock(self, key: str) -> bool:
+        from app.application.job_store_settings import default_lock_ttl_seconds
+        from app.application.lock_utils import should_relinquish_lock
+
         path = _lock_path(key)
         existing = await self._blob.get_json(path)
         if existing is None:
             return False
-        if _is_expired(existing.get("expires_at")):
+        if should_relinquish_lock(
+            existing, configured_ttl_seconds=default_lock_ttl_seconds()
+        ):
             await self._blob.delete(path)
             return True
         return False
@@ -313,11 +318,16 @@ class VercelBlobJobStore:
             await self._blob.delete(path)
 
     async def is_lock_held(self, key: str) -> bool:
+        from app.application.job_store_settings import default_lock_ttl_seconds
+        from app.application.lock_utils import should_relinquish_lock
+
         path = _lock_path(key)
         existing = await self._blob.get_json(path)
         if existing is None:
             return False
-        if _is_expired(existing.get("expires_at")):
+        if should_relinquish_lock(
+            existing, configured_ttl_seconds=default_lock_ttl_seconds()
+        ):
             await self._blob.delete(path)
             return False
         return True

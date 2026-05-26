@@ -12,7 +12,13 @@ from app.application.job_store_factory import (
     get_job_store,
     lock_ttl_seconds,
 )
-from app.application.lock_utils import is_lock_expired, seconds_until_expiry
+from app.application.lock_utils import (
+    is_legacy_oversized_lock,
+    is_lock_expired,
+    lock_granted_ttl_seconds,
+    seconds_until_expiry,
+    should_relinquish_lock,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -39,8 +45,11 @@ def _lock_view(key: str, record: dict[str, Any] | None) -> dict[str, Any]:
             "seconds_until_expiry": None,
         }
     expires_at = record.get("expires_at")
+    ttl = lock_ttl_seconds()
     expired = is_lock_expired(expires_at)
-    held = not expired and bool(record.get("holder"))
+    legacy_stale = is_legacy_oversized_lock(record, configured_ttl_seconds=ttl)
+    relinquish = should_relinquish_lock(record, configured_ttl_seconds=ttl)
+    held = not relinquish and bool(record.get("holder"))
     return {
         "lock_key": key,
         "held": held,
@@ -48,6 +57,12 @@ def _lock_view(key: str, record: dict[str, Any] | None) -> dict[str, Any]:
         "created_at": record.get("created_at"),
         "expires_at": expires_at,
         "expired": expired,
+        "legacy_ttl_exceeded": legacy_stale,
+        "granted_ttl_seconds": lock_granted_ttl_seconds(
+            created_at=record.get("created_at"),
+            expires_at=expires_at,
+        ),
+        "configured_ttl_seconds": ttl,
         "seconds_until_expiry": seconds_until_expiry(expires_at),
     }
 
@@ -79,20 +94,31 @@ async def detailed_lock_status() -> dict[str, Any]:
 
 
 async def cleanup_expired_payment_validation_locks() -> dict[str, Any]:
-    """Elimina solo locks expirados (o con expires_at inválido)."""
+    """Elimina locks expirados o legacy (TTL emitido > LOCK_TTL_SECONDS actual)."""
     store = get_job_store()
+    ttl = lock_ttl_seconds()
     cleaned: list[str] = []
+    reasons: dict[str, str] = {}
     for key in (_LOCK_GENERATE, _LOCK_FINALIZE):
+        rec = await _lock_record(key)
+        if not rec or not should_relinquish_lock(rec, configured_ttl_seconds=ttl):
+            continue
+        if is_lock_expired(rec.get("expires_at")):
+            reasons[key] = "expired"
+        else:
+            reasons[key] = "legacy_ttl_exceeded"
         cleanup = getattr(store, "cleanup_expired_lock", None)
         if callable(cleanup):
             if await cleanup(key):
                 cleaned.append(key)
-        else:
-            rec = await _lock_record(key)
-            if rec and is_lock_expired(rec.get("expires_at")):
-                await store.release_lock(key, str(rec.get("holder") or _LOCK_HOLDER))
-                cleaned.append(key)
-    return {"cleaned": cleaned, "locks": await detailed_lock_status()}
+                continue
+        await store.release_lock(key, str(rec.get("holder") or _LOCK_HOLDER))
+        cleaned.append(key)
+    return {
+        "cleaned": cleaned,
+        "reasons": reasons,
+        "locks": await detailed_lock_status(),
+    }
 
 
 async def release_all_payment_validation_locks() -> dict[str, bool | str]:
@@ -147,9 +173,9 @@ async def build_lock_conflict_detail(*, operation: str) -> dict[str, Any]:
             "si el lock ya expiró."
         ),
         "next_action": (
-            "Revise locks en GET /diagnostics/payment-validation/locks. "
-            "Si expired=true, ejecute POST /diagnostics/payment-validation/locks/cleanup-expired "
-            "y reintente generate/finalize."
+            "Ejecute POST /diagnostics/payment-validation/locks/cleanup-expired "
+            "(limpia expirados y locks legacy de 24h) y reintente generate/finalize. "
+            "Si persiste, POST .../locks/release-stale con confirm=true."
         ),
         "locks": locks,
     }

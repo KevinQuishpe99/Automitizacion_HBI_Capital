@@ -3,7 +3,8 @@ from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from app.application.lock_utils import is_lock_expired
+from app.application.job_store_settings import default_lock_ttl_seconds
+from app.application.lock_utils import is_lock_expired, should_relinquish_lock
 from app.domain.ports.job_store import JobStore
 
 
@@ -60,7 +61,9 @@ class MemoryJobStore:
             existing = self._locks.get(key)
             if existing is None:
                 return False
-            if is_lock_expired(existing.get("expires_at")):
+            if should_relinquish_lock(
+                existing, configured_ttl_seconds=default_lock_ttl_seconds()
+            ):
                 del self._locks[key]
                 return True
             return False
@@ -99,7 +102,9 @@ class MemoryJobStore:
             existing = self._locks.get(key)
             if existing is None:
                 return False
-            if is_lock_expired(existing.get("expires_at")):
+            if should_relinquish_lock(
+                existing, configured_ttl_seconds=default_lock_ttl_seconds()
+            ):
                 del self._locks[key]
                 return False
             return True
