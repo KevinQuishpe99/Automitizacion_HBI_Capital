@@ -3,6 +3,7 @@ from typing import TYPE_CHECKING
 
 from app.adapters.secondary.memory_job_store import MemoryJobStore
 from app.application.job_store_settings import (
+    default_lock_ttl_seconds,
     has_blob_token,
     is_vercel_runtime,
     job_store_backend,
@@ -17,7 +18,13 @@ _store: JobStore | None = None
 _LOCK_GENERATE = "payment_validation:generate"
 _LOCK_FINALIZE = "payment_validation:finalize"
 _LOCK_HOLDER = "global"
-_LOCK_TTL_SECONDS = 86_400
+def lock_ttl_seconds() -> int:
+    """TTL de locks generate/finalize (env LOCK_TTL_SECONDS, default 900)."""
+    return default_lock_ttl_seconds()
+
+
+# Alias para tests que importan el valor por defecto del entorno actual.
+_LOCK_TTL_SECONDS = lock_ttl_seconds()
 
 
 def _create_memory_store() -> MemoryJobStore:
@@ -78,6 +85,7 @@ def safe_runtime_config() -> dict[str, str | bool]:
         "has_blob_store_id": bool((os.getenv("BLOB_STORE_ID") or "").strip()),
         "store_class": type(store).__name__,
         "vercel_env_set": is_vercel_runtime(),
+        "lock_ttl_seconds": lock_ttl_seconds(),
     }
 
 

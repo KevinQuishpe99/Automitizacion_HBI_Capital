@@ -1,8 +1,9 @@
 import asyncio
-import time
 from copy import deepcopy
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from app.application.lock_utils import is_lock_expired
 from app.domain.ports.job_store import JobStore
 
 
@@ -49,25 +50,41 @@ class MemoryJobStore:
             current["events"] = events
             self._jobs[job_id] = current
 
+    async def get_lock(self, key: str) -> dict[str, Any] | None:
+        async with self._job_lock:
+            existing = self._locks.get(key)
+            return deepcopy(existing) if existing is not None else None
+
+    async def cleanup_expired_lock(self, key: str) -> bool:
+        async with self._job_lock:
+            existing = self._locks.get(key)
+            if existing is None:
+                return False
+            if is_lock_expired(existing.get("expires_at")):
+                del self._locks[key]
+                return True
+            return False
+
     async def acquire_lock(self, key: str, holder: str, ttl_seconds: int) -> bool:
         async with self._job_lock:
-            now = time.monotonic()
+            now = datetime.now(timezone.utc)
             existing = self._locks.get(key)
             if existing is not None:
-                expires_at = existing.get("expires_at")
-                if expires_at is not None and now >= expires_at:
-                    pass
-                elif existing.get("holder") == holder:
-                    self._locks[key] = {
-                        "holder": holder,
-                        "expires_at": now + ttl_seconds if ttl_seconds > 0 else None,
-                    }
-                    return True
-                else:
+                if not is_lock_expired(existing.get("expires_at")):
+                    if existing.get("holder") == holder:
+                        self._locks[key] = {
+                            "lock_key": key,
+                            "holder": holder,
+                            "created_at": existing.get("created_at") or now.isoformat(),
+                            "expires_at": (now + timedelta(seconds=ttl_seconds)).isoformat(),
+                        }
+                        return True
                     return False
             self._locks[key] = {
+                "lock_key": key,
                 "holder": holder,
-                "expires_at": now + ttl_seconds if ttl_seconds > 0 else None,
+                "created_at": now.isoformat(),
+                "expires_at": (now + timedelta(seconds=ttl_seconds)).isoformat(),
             }
             return True
 
@@ -82,8 +99,7 @@ class MemoryJobStore:
             existing = self._locks.get(key)
             if existing is None:
                 return False
-            expires_at = existing.get("expires_at")
-            if expires_at is not None and time.monotonic() >= expires_at:
+            if is_lock_expired(existing.get("expires_at")):
                 del self._locks[key]
                 return False
             return True

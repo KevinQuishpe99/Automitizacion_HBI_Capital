@@ -1,5 +1,6 @@
 import logging
 import asyncio
+import os
 from datetime import date, datetime, timezone
 from time import perf_counter
 from typing import Any
@@ -12,7 +13,16 @@ from app.application.job_status_enrichment import enrich_job_for_http_response
 from app.application.job_manager import JobManager
 from app.application.job_runner_factory import get_job_runner
 from app.application.jobs.amortization_dry_run_job import execute_amortization_dry_run_job
-from app.application.payment_validation_locks import lock_status
+from app.application.jobs.payment_validation_finalize_job import (
+    execute_payment_validation_finalize_job,
+)
+from app.application.jobs.payment_validation_generate_job import (
+    execute_payment_validation_generate_job,
+)
+from app.application.payment_validation_locks import (
+    build_lock_conflict_detail,
+    cleanup_expired_payment_validation_locks,
+)
 from app.application.use_cases.setup_ibr_workbook import (
     IbrWorkbookSetupError,
     setup_ibr_workbook,
@@ -82,6 +92,21 @@ async def _run_amortization_dry_run_job(
 
 # ─── Endpoints ────────────────────────────────────────────────────────────────
 
+
+async def _try_start_generate_with_cleanup(jm: JobManager) -> bool:
+    if await jm.try_start_generate():
+        return True
+    await cleanup_expired_payment_validation_locks()
+    return await jm.try_start_generate()
+
+
+async def _try_start_finalize_with_cleanup(jm: JobManager) -> bool:
+    if await jm.try_start_finalize():
+        return True
+    await cleanup_expired_payment_validation_locks()
+    return await jm.try_start_finalize()
+
+
 @router.post("/generate/queue", status_code=202)
 async def queue_generate(
     graph: GraphClientDep,
@@ -93,18 +118,10 @@ async def queue_generate(
     Power Automate debe llamar este endpoint y luego consultar /jobs/{job_id}.
     """
     jm = JobManager()
-    if not await jm.try_start_generate():
-        locks = await lock_status()
+    if not await _try_start_generate_with_cleanup(jm):
         raise HTTPException(
             status_code=409,
-            detail={
-                "error": "generate_or_finalize_lock_active",
-                "user_message": (
-                    "Ya existe un proceso generate o finalize activo. "
-                    "Consulta GET /graph/sharepoint/payment-validation/jobs/{job_id}."
-                ),
-                "locks": locks,
-            },
+            detail=await build_lock_conflict_detail(operation="generate"),
         )
 
     body = body or GenerateRequest()
@@ -126,14 +143,32 @@ async def queue_generate(
         "updated_at": _utc_now_iso(),
     })
 
-    runner = get_job_runner()
-    await runner.enqueue_payment_validation_generate(
-        job_id=job_id,
-        graph=graph,
-        process_date_iso=process_date.isoformat(),
-        background_tasks=background_tasks,
+    use_vercel_workflows = (
+        os.getenv("JOB_RUNNER_BACKEND", "").strip().lower() == "vercel_workflow"
+        and os.getenv("VERCEL_WORKFLOWS_ENABLED", "").strip().lower() == "true"
     )
-    logger.info("job %s: generate encolado (%s)", job_id, type(runner).__name__)
+
+    try:
+        if use_vercel_workflows:
+            background_tasks.add_task(
+                execute_payment_validation_generate_job,
+                job_id,
+                graph,
+                process_date_iso=process_date.isoformat(),
+            )
+            logger.info("job %s: generate encolado (BackgroundTasks)", job_id)
+        else:
+            runner = get_job_runner()
+            await runner.enqueue_payment_validation_generate(
+                job_id=job_id,
+                graph=graph,
+                process_date_iso=process_date.isoformat(),
+                background_tasks=background_tasks,
+            )
+            logger.info("job %s: generate encolado (%s)", job_id, type(runner).__name__)
+    except Exception:
+        await jm.finish_generate()
+        raise
 
     return {"job_id": job_id, "status": "queued"}
 
@@ -153,18 +188,10 @@ async def queue_finalize(
     temporalmente en `sharepoint.py` y NO se consolida todavía.
     """
     jm = JobManager()
-    if not await jm.try_start_finalize():
-        locks = await lock_status()
+    if not await _try_start_finalize_with_cleanup(jm):
         raise HTTPException(
             status_code=409,
-            detail={
-                "error": "generate_or_finalize_lock_active",
-                "user_message": (
-                    "Ya existe un proceso generate o finalize activo. "
-                    "Consulta GET /graph/sharepoint/payment-validation/jobs/{job_id}."
-                ),
-                "locks": locks,
-            },
+            detail=await build_lock_conflict_detail(operation="finalize"),
         )
 
     body = body or FinalizeRequest()
@@ -188,16 +215,36 @@ async def queue_finalize(
         "updated_at": _utc_now_iso(),
     })
 
-    runner = get_job_runner()
-    await runner.enqueue_payment_validation_finalize(
-        job_id=job_id,
-        graph=graph,
-        validation_file=validation_file,
-        validation_file_path=validation_file_path,
-        process_date_iso=process_date.isoformat(),
-        background_tasks=background_tasks,
+    use_vercel_workflows = (
+        os.getenv("JOB_RUNNER_BACKEND", "").strip().lower() == "vercel_workflow"
+        and os.getenv("VERCEL_WORKFLOWS_ENABLED", "").strip().lower() == "true"
     )
-    logger.info("job %s: finalize encolado (%s)", job_id, type(runner).__name__)
+
+    try:
+        if use_vercel_workflows:
+            background_tasks.add_task(
+                execute_payment_validation_finalize_job,
+                job_id,
+                graph,
+                validation_file=validation_file,
+                validation_file_path=validation_file_path,
+                process_date_iso=process_date.isoformat(),
+            )
+            logger.info("job %s: finalize encolado (BackgroundTasks)", job_id)
+        else:
+            runner = get_job_runner()
+            await runner.enqueue_payment_validation_finalize(
+                job_id=job_id,
+                graph=graph,
+                validation_file=validation_file,
+                validation_file_path=validation_file_path,
+                process_date_iso=process_date.isoformat(),
+                background_tasks=background_tasks,
+            )
+            logger.info("job %s: finalize encolado (%s)", job_id, type(runner).__name__)
+    except Exception:
+        await jm.finish_finalize()
+        raise
 
     return {"job_id": job_id, "status": "queued"}
 

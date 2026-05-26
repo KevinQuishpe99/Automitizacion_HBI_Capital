@@ -17,9 +17,12 @@ from app.application.job_status_enrichment import enrich_job_for_http_response
 from app.application.jobs.workflow_ping_markers import list_markers
 from app.application.graph_env_checklist import graph_env_missing_required, graph_env_presence
 from app.application.payment_validation_locks import (
-    lock_status,
+    cleanup_expired_payment_validation_locks,
+    detailed_lock_status,
     release_all_payment_validation_locks,
+    release_stale_lock_admin,
 )
+from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
@@ -71,9 +74,42 @@ async def get_graph_env_present() -> dict[str, object]:
 
 
 @router.get("/payment-validation/locks")
-async def get_payment_validation_locks() -> dict[str, bool | str]:
-    """Locks generate/finalize en Blob (útil si Render y Vercel comparten store)."""
-    return await lock_status()
+async def get_payment_validation_locks() -> dict[str, Any]:
+    """Estado detallado de locks generate/finalize (holder, expires_at, expired)."""
+    return await detailed_lock_status()
+
+
+@router.post("/payment-validation/locks/cleanup-expired", status_code=200)
+async def post_cleanup_expired_payment_validation_locks() -> dict[str, Any]:
+    """Elimina solo locks expirados (no toca locks vigentes)."""
+    try:
+        return await cleanup_expired_payment_validation_locks()
+    except Exception as exc:
+        logger.exception("payment_validation locks cleanup-expired failed")
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "lock_cleanup_failed", "message": str(exc)[:300]},
+        ) from exc
+
+
+class ReleaseStaleLockBody(BaseModel):
+    lock_key: str = Field(..., description="payment_validation:generate o payment_validation:finalize")
+    confirm: bool = False
+
+
+@router.post("/payment-validation/locks/release-stale", status_code=200)
+async def post_release_stale_payment_validation_lock(body: ReleaseStaleLockBody) -> dict[str, Any]:
+    """
+    Libera un lock aunque no haya expirado (solo diagnóstico; requiere confirm=true).
+    """
+    try:
+        return await release_stale_lock_admin(lock_key=body.lock_key, confirm=body.confirm)
+    except Exception as exc:
+        logger.exception("payment_validation locks release-stale failed")
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "lock_release_stale_failed", "message": str(exc)[:300]},
+        ) from exc
 
 
 @router.post("/payment-validation/locks/release", status_code=200)
@@ -95,7 +131,7 @@ async def post_release_payment_validation_locks() -> dict[str, bool | str]:
 
 
 @router.get("/runtime-config-safe")
-async def get_runtime_config_safe() -> dict[str, str | bool]:
+async def get_runtime_config_safe() -> dict[str, str | bool | int]:
     """Metadata de runtime sin secretos (JobStore/JobRunner en servicio API)."""
     return safe_runtime_config()
 

@@ -60,15 +60,9 @@ def _compute_expires_at_iso(days: int) -> str:
 
 
 def _is_expired(expires_at: str | None) -> bool:
-    if not expires_at:
-        return False
-    try:
-        exp = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
-        if exp.tzinfo is None:
-            exp = exp.replace(tzinfo=timezone.utc)
-        return datetime.now(timezone.utc) >= exp
-    except ValueError:
-        return False
+    from app.application.lock_utils import is_lock_expired
+
+    return is_lock_expired(expires_at)
 
 
 def _serialize_json(payload: Any) -> bytes:
@@ -298,6 +292,19 @@ class VercelBlobJobStore:
         if check and check.get("holder") != holder and not _is_expired(check.get("expires_at")):
             return False
         return True
+
+    async def get_lock(self, key: str) -> dict[str, Any] | None:
+        return await self._blob.get_json(_lock_path(key))
+
+    async def cleanup_expired_lock(self, key: str) -> bool:
+        path = _lock_path(key)
+        existing = await self._blob.get_json(path)
+        if existing is None:
+            return False
+        if _is_expired(existing.get("expires_at")):
+            await self._blob.delete(path)
+            return True
+        return False
 
     async def release_lock(self, key: str, holder: str) -> None:
         path = _lock_path(key)

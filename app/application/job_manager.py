@@ -4,8 +4,8 @@ from app.application.job_store_factory import (
     _LOCK_FINALIZE,
     _LOCK_GENERATE,
     _LOCK_HOLDER,
-    _LOCK_TTL_SECONDS,
     get_job_store,
+    lock_ttl_seconds,
 )
 from app.domain.ports.job_store import JobStore
 
@@ -43,7 +43,7 @@ class JobManager:
             self._generate_active = False
             self._finalize_active = await store.is_lock_held(_LOCK_FINALIZE)
             return False
-        acquired = await store.acquire_lock(_LOCK_GENERATE, _LOCK_HOLDER, _LOCK_TTL_SECONDS)
+        acquired = await store.acquire_lock(_LOCK_GENERATE, _LOCK_HOLDER, lock_ttl_seconds())
         self._generate_active = acquired
         return acquired
 
@@ -58,7 +58,7 @@ class JobManager:
             self._finalize_active = False
             self._generate_active = await store.is_lock_held(_LOCK_GENERATE)
             return False
-        acquired = await store.acquire_lock(_LOCK_FINALIZE, _LOCK_HOLDER, _LOCK_TTL_SECONDS)
+        acquired = await store.acquire_lock(_LOCK_FINALIZE, _LOCK_HOLDER, lock_ttl_seconds())
         self._finalize_active = acquired
         return acquired
 
