@@ -83,9 +83,12 @@ async def lock_status() -> dict[str, bool | str | int]:
 
 
 async def detailed_lock_status() -> dict[str, Any]:
+    from app.application.job_store_settings import payment_validation_locks_enabled
+
     gen_rec = await _lock_record(_LOCK_GENERATE)
     fin_rec = await _lock_record(_LOCK_FINALIZE)
     return {
+        "locks_enabled": payment_validation_locks_enabled(),
         "lock_ttl_seconds": lock_ttl_seconds(),
         "lock_holder": _LOCK_HOLDER,
         "generate": _lock_view(_LOCK_GENERATE, gen_rec),

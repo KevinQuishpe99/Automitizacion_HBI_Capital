@@ -19,7 +19,9 @@ def test_job_manager_singleton():
     assert manager1 is manager2
 
 
-def test_job_manager_concurrency_lock():
+def test_job_manager_concurrency_lock(monkeypatch):
+    monkeypatch.setenv("PAYMENT_VALIDATION_LOCKS_ENABLED", "true")
+
     async def run_test():
         manager = JobManager()
         success1 = await manager.try_start_generate()
@@ -37,7 +39,9 @@ def test_job_manager_concurrency_lock():
     asyncio.run(run_test())
 
 
-def test_job_manager_generate_blocks_finalize():
+def test_job_manager_generate_blocks_finalize(monkeypatch):
+    monkeypatch.setenv("PAYMENT_VALIDATION_LOCKS_ENABLED", "true")
+
     async def run_test():
         manager = JobManager()
         assert await manager.try_start_generate() is True

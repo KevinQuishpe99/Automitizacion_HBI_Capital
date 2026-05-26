@@ -25,7 +25,8 @@ from app.application.payment_validation_locks import (
 
 
 @pytest.fixture(autouse=True)
-def _memory_store():
+def _memory_store(monkeypatch):
+    monkeypatch.setenv("PAYMENT_VALIDATION_LOCKS_ENABLED", "true")
     configure_job_store(MemoryJobStore())
     yield
     reset_job_store_for_tests()
@@ -38,6 +39,30 @@ def test_lock_ttl_uses_env_not_hardcoded_24h(monkeypatch):
 
     assert default_lock_ttl_seconds() == 1800
     assert lock_ttl_seconds() == 1800
+
+
+def test_locks_disabled_finalize_not_blocked_by_generate_lock():
+    async def run() -> None:
+        import os
+
+        os.environ["PAYMENT_VALIDATION_LOCKS_ENABLED"] = "false"
+        store = MemoryJobStore()
+        configure_job_store(store)
+        now = datetime.now(timezone.utc)
+        store._locks[_LOCK_GENERATE] = {
+            "holder": _LOCK_HOLDER,
+            "created_at": now.isoformat(),
+            "expires_at": (now + timedelta(seconds=900)).isoformat(),
+        }
+        jm = JobManager()
+        assert await jm.try_start_finalize() is True
+        await jm.finish_finalize()
+
+    try:
+        asyncio.run(run())
+    finally:
+        reset_job_store_for_tests()
+        JobManager._instance = None
 
 
 def test_finalize_job_releases_lock_on_success():

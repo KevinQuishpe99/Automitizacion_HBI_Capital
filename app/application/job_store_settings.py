@@ -33,6 +33,16 @@ def default_lock_ttl_seconds() -> int:
         return 900
 
 
+def payment_validation_locks_enabled() -> bool:
+    """
+    Locks generate/finalize (mutua exclusión). Desactivados por defecto:
+    la idempotencia de negocio ya protege el flujo; evita bloqueos en Blob.
+  Activar con PAYMENT_VALIDATION_LOCKS_ENABLED=true cuando se quiera serializar.
+    """
+    raw = (os.getenv("PAYMENT_VALIDATION_LOCKS_ENABLED") or "false").strip().lower()
+    return raw in ("1", "true", "yes", "on")
+
+
 def is_vercel_runtime() -> bool:
     return (os.getenv("VERCEL") or "").strip() == "1"
 

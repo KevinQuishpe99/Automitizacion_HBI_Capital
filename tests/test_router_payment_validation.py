@@ -316,8 +316,9 @@ def test_generate_returns_immediately_without_heavy_logic(client):
 # ──────────────────────────────────────────────────────────────────────────────
 # 7. Conflicto 409 cuando ya hay un proceso activo
 # ──────────────────────────────────────────────────────────────────────────────
-def test_generate_returns_409_if_already_active(client):
+def test_generate_returns_409_if_already_active(client, monkeypatch):
     """Si hay un generate o finalize activo, debe devolver 409."""
+    monkeypatch.setenv("PAYMENT_VALIDATION_LOCKS_ENABLED", "true")
     asyncio.run(
         get_job_store().acquire_lock(_LOCK_GENERATE, _LOCK_HOLDER, _LOCK_TTL_SECONDS)
     )
@@ -326,8 +327,9 @@ def test_generate_returns_409_if_already_active(client):
     assert res.status_code == 409
 
 
-def test_finalize_returns_409_if_generate_active(client):
+def test_finalize_returns_409_if_generate_active(client, monkeypatch):
     """Finalize también debe bloquear si hay un generate activo."""
+    monkeypatch.setenv("PAYMENT_VALIDATION_LOCKS_ENABLED", "true")
     asyncio.run(
         get_job_store().acquire_lock(_LOCK_GENERATE, _LOCK_HOLDER, _LOCK_TTL_SECONDS)
     )

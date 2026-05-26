@@ -65,12 +65,14 @@ def test_lock_acquire_release_and_conflict(store: MemoryJobStore) -> None:
     asyncio.run(run())
 
 
-def test_job_manager_enforces_generate_finalize_mutual_exclusion() -> None:
+def test_job_manager_enforces_generate_finalize_mutual_exclusion(monkeypatch) -> None:
     """La exclusión generate/finalize la aplica JobManager, no una sola clave de lock."""
+    monkeypatch.setenv("PAYMENT_VALIDATION_LOCKS_ENABLED", "true")
     from app.application.job_manager import JobManager
     from app.application.job_store_factory import reset_job_store_for_tests
 
     reset_job_store_for_tests()
+    JobManager._instance = None
 
     async def run() -> None:
         jm = JobManager()

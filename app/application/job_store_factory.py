@@ -7,6 +7,7 @@ from app.application.job_store_settings import (
     has_blob_token,
     is_vercel_runtime,
     job_store_backend,
+    payment_validation_locks_enabled,
 )
 from app.domain.ports.job_store import JobStore
 
@@ -86,6 +87,7 @@ def safe_runtime_config() -> dict[str, str | bool]:
         "store_class": type(store).__name__,
         "vercel_env_set": is_vercel_runtime(),
         "lock_ttl_seconds": lock_ttl_seconds(),
+        "payment_validation_locks_enabled": payment_validation_locks_enabled(),
     }
 
 
