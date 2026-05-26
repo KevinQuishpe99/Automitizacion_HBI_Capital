@@ -15,6 +15,7 @@ from app.application.job_runner_settings import use_vercel_workflow_runner
 from app.application.job_store_factory import get_job_store, safe_runtime_config
 from app.application.job_status_enrichment import enrich_job_for_http_response
 from app.application.jobs.workflow_ping_markers import list_markers
+from app.application.graph_env_checklist import graph_env_missing_required, graph_env_presence
 from app.application.payment_validation_locks import (
     lock_status,
     release_all_payment_validation_locks,
@@ -52,6 +53,20 @@ def _safe_job_metadata(raw: dict[str, Any]) -> dict[str, Any]:
         "error_type": error.get("type") if isinstance(error, dict) else None,
         "error_code": error.get("error_code") if isinstance(error, dict) else None,
         "meta_source": "vercel_blob",
+    }
+
+
+@router.get("/graph-env-present")
+async def get_graph_env_present() -> dict[str, object]:
+    """
+    Qué variables GRAPH_* están definidas (sin exponer valores).
+  Copiar las faltantes desde Render → Vercel Dashboard.
+    """
+    missing = graph_env_missing_required()
+    return {
+        "present": graph_env_presence(),
+        "missing_core": missing,
+        "all_core_ok": len(missing) == 0,
     }
 
 
