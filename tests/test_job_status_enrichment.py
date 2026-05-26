@@ -33,6 +33,30 @@ def test_finalize_completed_job_includes_user_message_next_action_severity():
     assert "soporte" in out["user_message"].lower() or "asientos" in out["user_message"].lower()
 
 
+def test_finalize_completed_existing_outputs_returns_warning_and_preserves_actions():
+    raw = _completed(
+        "finalize",
+        {
+            "validated_rows": 1,
+            "historical_file_path": "history/cartera_validada_2026-05-10.xlsx",
+            "secretary_file_path": "history/soporte_asientos_contables_2026-05-10.xlsx",
+            "historical_file_action": "replaced",
+            "secretary_file_action": "replaced",
+            "historical_file_already_exists": True,
+            "secretary_file_already_exists": True,
+            "warning_code": "FINALIZE_OUTPUT_ALREADY_EXISTS",
+            "severity": "warning",
+            "user_message": "Finalize ya existía; se reemplazó el histórico/soporte.",
+            "next_action": "Revise los archivos reemplazados en SharePoint.",
+        },
+    )
+    out = enrich_job_for_http_response(raw)
+    assert out["severity"] == "warning"
+    assert out["user_message"] == "Finalize ya existía; se reemplazó el histórico/soporte."
+    assert out["result"]["historical_file_action"] == "replaced"
+    assert out["result"]["secretary_file_action"] == "replaced"
+
+
 def test_notify_completed_job_includes_user_message_next_action_severity():
     raw = _completed(
         "notify_validar_extractos",
@@ -73,6 +97,23 @@ def test_notify_completed_missing_email_pdf_for_merge_control_has_warning_severi
     assert "pdf" in out["next_action"].lower()
 
 
+def test_notify_completed_merge_control_updated_false_without_known_error_code_has_warning_severity():
+    raw = _completed(
+        "notify_validar_extractos",
+        {
+            "status": "ok",
+            "email_sent": True,
+            "merge_control_updated": False,
+            "merge_control_error_code": "some_unknown_code",
+            "merge_control_warning": "control no actualizado por motivo X",
+        },
+    )
+    out = enrich_job_for_http_response(raw)
+    assert out["severity"] == "warning"
+    assert "correo" in out["user_message"].lower()
+    assert "control" in out["next_action"].lower()
+
+
 def test_merge_completed_job_includes_user_message_next_action_severity():
     raw = _completed(
         "merge_composite_validado_pdfs",
@@ -103,6 +144,29 @@ def test_merge_completed_with_outputs_and_skipped_warning():
     )
     out = enrich_job_for_http_response(raw)
     assert out["severity"] == "warning"
+
+
+def test_merge_completed_all_outputs_reused_already_consolidated_warning():
+    raw = _completed(
+        "merge_composite_validado_pdfs",
+        {
+            "already_consolidated": True,
+            "outputs": [
+                {"id_pago": "1", "output_relative_path": "out/1.pdf", "bytes_written": 0}
+            ],
+            "skipped": [],
+        },
+    )
+    out = enrich_job_for_http_response(raw)
+    assert out["severity"] == "warning"
+    assert (
+        out["user_message"]
+        == "El merge terminó correctamente, pero no se generó un PDF nuevo porque el consolidado ya existía."
+    )
+    assert (
+        out["next_action"]
+        == "Use force_rebuild=true si desea regenerar y reemplazar el PDF consolidado."
+    )
 
 
 def test_generate_failed_known_error_returns_standard_error_object():
@@ -206,3 +270,18 @@ def test_non_enrichable_job_type_unchanged():
     raw = {"job_id": "x", "type": "ensure_asientos_contables", "status": "completed", "result": {}}
     out = enrich_job_for_http_response(raw)
     assert "user_message" not in out
+
+
+def test_amortization_apply_completed_all_idempotent_skips_returns_warning():
+    raw = _completed(
+        "amortization_apply",
+        {
+            "status": "ok",
+            "apply_wrote_changes": False,
+            "all_skipped_idempotent": True,
+            "idempotent_skips_count": 3,
+        },
+    )
+    out = enrich_job_for_http_response(raw)
+    assert out["severity"] == "warning"
+    assert "idempotentes" in out["user_message"].lower()

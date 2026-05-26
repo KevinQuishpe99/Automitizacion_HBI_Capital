@@ -54,6 +54,7 @@ async def execute_ensure_asientos_contables_job(job_id: str, graph: Any) -> None
                     "credit_folders_scanned": result.credit_folders_scanned,
                     "folders_created": result.folders_created,
                     "folders_already_present": result.folders_already_present,
+                    "folders_failed": len(result.errors or []),
                     "subfolder_names": list(result.subfolder_names),
                     "errors": result.errors,
                 },

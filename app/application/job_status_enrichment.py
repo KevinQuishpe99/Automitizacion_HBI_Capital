@@ -16,6 +16,7 @@ ENRICHABLE_JOB_TYPES = frozenset(
         "finalize",
         "notify_validar_extractos",
         "merge_composite_validado_pdfs",
+        "amortization_apply",
         "amortization_dry_run",
     }
 )
@@ -611,6 +612,14 @@ def _merge_completed_enrichment(job_type: str, result: dict[str, Any]) -> tuple[
             "success",
         )
     if job_type == "finalize":
+        if str(result.get("warning_code") or "").strip() == "FINALIZE_OUTPUT_ALREADY_EXISTS":
+            return (
+                str(result.get("user_message") or "")
+                or "Finalize terminó, pero el histórico/soporte del día ya existía y fue reemplazado.",
+                str(result.get("next_action") or "")
+                or "Revise en SharePoint los archivos reemplazados (02 HISTORICO y soporte_asientos_contables).",
+                "warning",
+            )
         return (
             "La revisión quedó cerrada correctamente. Se guardó el histórico del día y el archivo de soporte "
             "para que la secretaría suba los asientos contables.",
@@ -621,6 +630,10 @@ def _merge_completed_enrichment(job_type: str, result: dict[str, Any]) -> tuple[
     if job_type == "notify_validar_extractos":
         ec = str(result.get("merge_control_error_code") or "").strip()
         wtxt = str(result.get("merge_control_warning") or "").strip()
+        email_sent = result.get("email_sent")
+        # Backward-compatibility: los tests anteriores no incluían email_sent.
+        if email_sent is None:
+            email_sent = True
         if ec == "merge_control_active_process_exists":
             return (
                 "Hizo bien el envío del correo: los destinatarios deberían haberlo recibido.",
@@ -665,6 +678,14 @@ def _merge_completed_enrichment(job_type: str, result: dict[str, Any]) -> tuple[
                 wtxt,
                 "warning",
             )
+        # Guardrail: correo pudo enviarse pero el control de merge quedó sin actualizar.
+        if bool(email_sent) and result.get("merge_control_updated") is False:
+            return (
+                "Hizo bien el envío del correo: los destinatarios deberían haberlo recibido.",
+                wtxt
+                or "No se actualizó el control para el paso de unir PDFs. Revise 00 CONTROL / control_merge_pdfs.xlsx.",
+                "warning",
+            )
         return (
             "El correo de abonos del banco se envió correctamente con la tabla del día y los extractos configurados.",
             "Revise la bandeja de los destinatarios (y correo no deseado). Siguiente paso operativo: la secretaría "
@@ -674,6 +695,21 @@ def _merge_completed_enrichment(job_type: str, result: dict[str, Any]) -> tuple[
     if job_type == "merge_composite_validado_pdfs":
         outputs = result.get("outputs") or []
         skipped = result.get("skipped") or []
+        if (
+            bool(result.get("already_consolidated"))
+            and isinstance(outputs, list)
+            and len(outputs) > 0
+            and all(
+                int(o.get("bytes_written") or 0) == 0
+                for o in outputs
+                if isinstance(o, dict)
+            )
+        ):
+            return (
+                "El merge terminó correctamente, pero no se generó un PDF nuevo porque el consolidado ya existía.",
+                "Use force_rebuild=true si desea regenerar y reemplazar el PDF consolidado.",
+                "warning",
+            )
         out_count = result.get("outputs_count")
         if out_count is None and isinstance(outputs, list):
             out_count = len(outputs)
@@ -710,6 +746,18 @@ def _merge_completed_enrichment(job_type: str, result: dict[str, Any]) -> tuple[
             "La unión de PDFs terminó; revise en result cuántos archivos se generaron y si hay pagos omitidos.",
             "Abra la carpeta 06 ASIENTO CONTABLES GENERADOS en SharePoint y, si aparece skipped en la respuesta, "
             "atienda los pagos listados antes de considerar el cierre completo.",
+            "success",
+        )
+    if job_type == "amortization_apply":
+        if result.get("apply_wrote_changes") is False:
+            return (
+                "La ejecución de amortización terminó correctamente, pero no se subió/escribió ninguna tabla porque todos los eventos fueron idempotentes.",
+                "Si desea forzar la regeneración/reescritura, revise condiciones de idempotencia y re-ejecute según corresponda.",
+                "warning",
+            )
+        return (
+            "La ejecución de amortización terminó correctamente.",
+            "Revise el detalle del apply en result (tablas y eventos) para confirmar el alcance.",
             "success",
         )
     if job_type == "amortization_dry_run":

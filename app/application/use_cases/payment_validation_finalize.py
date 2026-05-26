@@ -365,6 +365,17 @@ def _build_content_endpoint(site_id: str, drive_id: str, file_path: str) -> str:
     return f"/sites/{site_id}/drives/{drive_id}/root:/{encode_graph_drive_path(file_path)}:/content"
 
 
+async def _drive_item_exists(graph: GraphApiPort, site_id: str, drive_id: str, file_path: str) -> bool:
+    """Pre-check idempotente de existencia (sin versionado): True si get_bytes no devuelve 404."""
+    try:
+        await graph.get_bytes(_build_content_endpoint(site_id, drive_id, file_path))
+        return True
+    except httpx.HTTPStatusError as exc:
+        if exc.response is not None and exc.response.status_code == 404:
+            return False
+        raise
+
+
 def _accounting_cell_filled(value: Any) -> bool:
     if value is None:
         return False
@@ -1330,6 +1341,35 @@ async def finalize_payment_validation(
     hist_full_path = f"{history_path}/{hist_name}"
     sec_full_path = f"{history_path}/{sec_name}"
 
+    historical_file_already_exists = await _drive_item_exists(
+        client, hist_info["site_id"], hist_info["drive_id"], hist_full_path
+    )
+    secretary_file_already_exists = await _drive_item_exists(
+        client, hist_info["site_id"], hist_info["drive_id"], sec_full_path
+    )
+
+    historical_file_action = (
+        "replaced" if historical_file_already_exists else "created"
+    )
+    secretary_file_action = (
+        "replaced" if secretary_file_already_exists else "created"
+    )
+
+    already_exists_warning: dict[str, Any] = {}
+    if historical_file_already_exists or secretary_file_already_exists:
+        already_exists_warning = {
+            "severity": "warning",
+            "warning_code": "FINALIZE_OUTPUT_ALREADY_EXISTS",
+            "user_message": (
+                "Finalize terminó, pero el histórico/soporte del día ya existía en SharePoint "
+                "y fue reemplazado."
+            ),
+            "next_action": (
+                "Revise en SharePoint los archivos reemplazados (02 HISTORICO / soporte_asientos_contables) "
+                "si esperaba un resultado diferente."
+            ),
+        }
+
     payment_followup_warnings = await register_payment_followups_after_finalize(
         client,
         hist_info["site_id"],
@@ -1361,8 +1401,12 @@ async def finalize_payment_validation(
         "status": "success",
         "historical_file_path": hist_full_path,
         "historical_file_url": historical_file_url,
+        "historical_file_action": historical_file_action,
+        "historical_file_already_exists": historical_file_already_exists,
         "secretary_file_path": sec_full_path,
         "secretary_file_url": secretary_file_url,
+        "secretary_file_action": secretary_file_action,
+        "secretary_file_already_exists": secretary_file_already_exists,
         "validated_rows": validated_rows,
         "amortization_updated": False,
         "bank_cleaned": False,
@@ -1371,4 +1415,5 @@ async def finalize_payment_validation(
         "validation_file_path": file_path,
         "process_date": effective_process_date.isoformat(),
         "payment_followup_warnings": payment_followup_warnings,
+        **already_exists_warning,
     }

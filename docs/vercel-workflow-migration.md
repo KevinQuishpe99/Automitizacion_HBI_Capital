@@ -20,6 +20,21 @@ Todos los endpoints `/queue` y `202` pesados usan `get_job_runner()`:
 
 Los payloads solo envían referencias (paths SharePoint, fechas ISO, flags), no archivos grandes en el body HTTP.
 
+## Semántica de `completed` y guardrails de observabilidad
+
+En estos flujos de SharePoint (Vercel Workflow y fallback), `status=completed` significa que el job terminó, pero no garantiza que se haya generado/escrito un artefacto nuevo.
+
+- `merge-composite-validado-pdfs`
+  - Puede reutilizar un PDF consolidado existente cuando `result.already_consolidated=true` y todos los `outputs[*].bytes_written=0`.
+  - En ese caso el `GET .../jobs/{job_id}` devuelve `severity='warning'` y recomienda usar `force_rebuild=true` para regenerar/reemplazar.
+- `notify-validar-extractos-email`
+  - Puede enviar el correo pero quedar `merge_control_updated=false` (no se actualizó el `control_merge_pdfs.xlsx` para el paso de unir PDFs).
+  - El `GET .../jobs/{job_id}` devuelve `severity='warning'` para que se deje el control listo antes del siguiente paso.
+- `payment-validation/finalize/queue`
+  - Finalize puede reemplazar el histórico y el soporte del día. Si ya existían, el job reporta `warning_code='FINALIZE_OUTPUT_ALREADY_EXISTS'` y muestra `severity='warning'`.
+- `payment-validation/amortization/apply/queue`
+  - Puede terminar sin subir/escribir tablas cuando todo fue idempotente (`apply_wrote_changes=false`); el `GET .../jobs/{job_id}` marca `severity='warning'` con la señal clara.
+
 ## Endpoints que permanecen síncronos
 
 - `GET /health`, `GET .../jobs/{job_id}` (consulta estado)

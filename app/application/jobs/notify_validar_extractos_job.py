@@ -57,6 +57,19 @@ async def execute_notify_validar_extractos_job(
             cc_override=payload.cc,
         )
         elapsed_ms = round((perf_counter() - started_ts) * 1000, 2)
+
+        graph_sendmail_http_status = int(result.graph_sendmail_http_status or 0)
+        email_sent = 200 <= graph_sendmail_http_status < 300
+        if result.email_pdf_path:
+            email_pdf_action = "created"
+        elif result.email_pdf_error:
+            email_pdf_action = "failed"
+        else:
+            email_pdf_action = "skipped"
+
+        # merge_control_workbook_after_notify registra/actualiza el paso solo si
+        # existe el PDF copia del correo (email_pdf_path).
+        merge_control_registered = bool(result.email_pdf_path)
         await _set_job(
             job_id,
             {
@@ -76,9 +89,12 @@ async def execute_notify_validar_extractos_job(
                     "attachments_count": result.attachments_count,
                     "email_pdf_path": result.email_pdf_path,
                     "email_pdf_error": result.email_pdf_error,
+                    "email_sent": email_sent,
+                    "email_pdf_action": email_pdf_action,
                     "graph_sendmail_http_status": result.graph_sendmail_http_status,
                     "mail_sender": result.mail_sender,
                     "mail_to": result.mail_to,
+                    "merge_control_registered": merge_control_registered,
                     "merge_control_updated": result.merge_control_updated,
                     "merge_control_file_path": result.merge_control_file_path,
                     "merge_control_status": result.merge_control_status,

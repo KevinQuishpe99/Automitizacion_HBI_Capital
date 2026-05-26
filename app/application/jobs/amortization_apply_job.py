@@ -53,13 +53,46 @@ async def execute_amortization_apply_job(
             historical_file_path=historical_file_path,
         )
         elapsed_ms = round((perf_counter() - started) * 1000, 2)
+
+        # Observabilidad/guardrails: señales sobre si se escribió/subió algo
+        summary = result.get("summary") or {}
+        tables_uploaded = result.get("tables_uploaded") or []
+        tables_summary = result.get("tables_summary") or []
+
+        tables_uploaded_count = len(tables_uploaded)
+        tables_skipped_count = sum(
+            1
+            for ts in tables_summary
+            if str(ts.get("upload_status") or "").strip().lower() == "skipped"
+        )
+        idempotent_skips_count = int(summary.get("skipped_idempotent") or 0)
+
+        summary_total = int(summary.get("total") or 0)
+        all_skipped_idempotent = bool(
+            summary_total > 0
+            and idempotent_skips_count == summary_total
+            and tables_uploaded_count == 0
+        )
+
+        applied = int(summary.get("applied") or 0)
+        adopted = int(summary.get("adopted") or 0)
+        apply_wrote_changes = bool((applied + adopted) > 0 or tables_uploaded_count > 0)
+
         await jm.set_job(
             job_id,
             {
                 "status": "completed",
                 "finished_at": _utc_now_iso(),
                 "updated_at": _utc_now_iso(),
-                "result": {**result, "elapsed_ms": elapsed_ms},
+                "result": {
+                    **result,
+                    "elapsed_ms": elapsed_ms,
+                    "tables_uploaded_count": tables_uploaded_count,
+                    "tables_skipped_count": tables_skipped_count,
+                    "idempotent_skips_count": idempotent_skips_count,
+                    "all_skipped_idempotent": all_skipped_idempotent,
+                    "apply_wrote_changes": apply_wrote_changes,
+                },
                 "error": None,
             },
         )
