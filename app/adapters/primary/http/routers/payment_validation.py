@@ -12,6 +12,8 @@ from app.application.job_status_enrichment import enrich_job_for_http_response
 from app.application.job_manager import JobManager
 from app.application.job_runner_factory import get_job_runner
 from app.application.jobs.amortization_dry_run_job import execute_amortization_dry_run_job
+from app.application.jobs.vercel_workflow_fallback import schedule_workflow_api_fallback
+from app.application.payment_validation_locks import lock_status
 from app.application.use_cases.payment_validation_generate import generate_payment_validation
 from app.application.use_cases.payment_validation_finalize import finalize_payment_validation
 from app.application.use_cases.setup_ibr_workbook import (
@@ -259,9 +261,17 @@ async def queue_generate(
     """
     jm = JobManager()
     if not await jm.try_start_generate():
+        locks = await lock_status()
         raise HTTPException(
             status_code=409,
-            detail="Ya existe un proceso generate o finalize activo. Consulta /jobs/{job_id}."
+            detail={
+                "error": "generate_or_finalize_lock_active",
+                "user_message": (
+                    "Ya existe un proceso generate o finalize activo. "
+                    "Consulta GET /graph/sharepoint/payment-validation/jobs/{job_id}."
+                ),
+                "locks": locks,
+            },
         )
 
     body = body or GenerateRequest()
@@ -284,6 +294,12 @@ async def queue_generate(
     })
 
     background_tasks.add_task(_run_generate_job, job_id, graph, process_date)
+    schedule_workflow_api_fallback(
+        background_tasks,
+        job_id=job_id,
+        label="generate",
+        execute=lambda: _run_generate_job(job_id, graph, process_date),
+    )
     logger.info("job %s: generate encolado", job_id)
 
     return {"job_id": job_id, "status": "queued"}
@@ -305,9 +321,17 @@ async def queue_finalize(
     """
     jm = JobManager()
     if not await jm.try_start_finalize():
+        locks = await lock_status()
         raise HTTPException(
             status_code=409,
-            detail="Ya existe un proceso generate o finalize activo. Consulta /jobs/{job_id}."
+            detail={
+                "error": "generate_or_finalize_lock_active",
+                "user_message": (
+                    "Ya existe un proceso generate o finalize activo. "
+                    "Consulta GET /graph/sharepoint/payment-validation/jobs/{job_id}."
+                ),
+                "locks": locks,
+            },
         )
 
     body = body or FinalizeRequest()
@@ -338,6 +362,14 @@ async def queue_finalize(
         validation_file,
         validation_file_path,
         process_date,
+    )
+    schedule_workflow_api_fallback(
+        background_tasks,
+        job_id=job_id,
+        label="finalize",
+        execute=lambda: _run_finalize_job(
+            job_id, graph, validation_file, validation_file_path, process_date
+        ),
     )
     logger.info("job %s: finalize encolado", job_id)
 
@@ -484,6 +516,18 @@ async def queue_amortization_apply(
         report_date_iso=report_date,
         merge_manifest_path=manifest_path,
         historical_file_path=historical_path,
+    )
+    schedule_workflow_api_fallback(
+        background_tasks,
+        job_id=job_id,
+        label="amortization_apply",
+        execute=lambda: _run_amortization_apply_job(
+            job_id,
+            graph,
+            report_date_iso=report_date,
+            merge_manifest_path=manifest_path,
+            historical_file_path=historical_path,
+        ),
     )
     logger.info("job %s: amortization_apply encolado", job_id)
 

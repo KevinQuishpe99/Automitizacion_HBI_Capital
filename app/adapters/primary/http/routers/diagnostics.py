@@ -15,6 +15,10 @@ from app.application.job_runner_settings import use_vercel_workflow_runner
 from app.application.job_store_factory import get_job_store, safe_runtime_config
 from app.application.job_status_enrichment import enrich_job_for_http_response
 from app.application.jobs.workflow_ping_markers import list_markers
+from app.application.payment_validation_locks import (
+    lock_status,
+    release_all_payment_validation_locks,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +53,23 @@ def _safe_job_metadata(raw: dict[str, Any]) -> dict[str, Any]:
         "error_code": error.get("error_code") if isinstance(error, dict) else None,
         "meta_source": "vercel_blob",
     }
+
+
+@router.get("/payment-validation/locks")
+async def get_payment_validation_locks() -> dict[str, bool | str]:
+    """Locks generate/finalize en Blob (útil si Render y Vercel comparten store)."""
+    return await lock_status()
+
+
+@router.post("/payment-validation/locks/release", status_code=200)
+async def post_release_payment_validation_locks() -> dict[str, bool | str]:
+    """
+    Libera locks generate/finalize atascados (p. ej. tras pruebas cruzadas Render+Vercel).
+    Solo diagnóstico operativo.
+    """
+    released = await release_all_payment_validation_locks()
+    logger.warning("payment_validation locks released via diagnostics")
+    return {"released": True, "locks": released}
 
 
 @router.get("/runtime-config-safe")

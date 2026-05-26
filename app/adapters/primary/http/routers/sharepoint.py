@@ -23,6 +23,7 @@ from app.application.use_cases.merge_composite_validado_pdfs import merge_compos
 from app.application.use_cases.validate_payment_report import validate_payment_report_and_replace_excel
 from app.application.job_status_enrichment import enrich_job_for_http_response
 from app.application.job_store_factory import get_job_store
+from app.application.jobs.vercel_workflow_fallback import schedule_workflow_api_fallback
 from app.domain.exceptions import GraphConfigError
 from app.models import GraphUploadRequest, MergeCompositeValidadoRequest, NotifyValidarExtractosRequest
 
@@ -487,6 +488,12 @@ async def validate_payment_report_queue(
         },
     )
     background_tasks.add_task(_run_validation_job, job_id, graph)
+    schedule_workflow_api_fallback(
+        background_tasks,
+        job_id=job_id,
+        label="validate_payment_report",
+        execute=lambda: _run_validation_job(job_id, graph),
+    )
     logger.info("job %s: encolado validate_payment_report", job_id)
     return {
         "status": "queued",
@@ -555,6 +562,14 @@ async def post_merge_composite_validado_pdfs(
         graph,
         force_rebuild=payload.force_rebuild,
     )
+    schedule_workflow_api_fallback(
+        background_tasks,
+        job_id=job_id,
+        label="merge_composite_validado_pdfs",
+        execute=lambda: _run_merge_composite_validado_pdfs_job(
+            job_id, graph, force_rebuild=payload.force_rebuild
+        ),
+    )
     logger.info("job %s: encolado merge_composite_validado_pdfs", job_id)
     return {
         "status": "queued",
@@ -602,6 +617,12 @@ async def notify_validar_extractos_email(
         },
     )
     background_tasks.add_task(_run_notify_validar_extractos_job, job_id, graph, payload)
+    schedule_workflow_api_fallback(
+        background_tasks,
+        job_id=job_id,
+        label="notify_validar_extractos",
+        execute=lambda: _run_notify_validar_extractos_job(job_id, graph, payload),
+    )
     logger.info("job %s: encolado notify_validar_extractos", job_id)
     return {
         "status": "queued",
@@ -640,6 +661,12 @@ async def post_ensure_asientos_contables_folders(
         },
     )
     background_tasks.add_task(_run_ensure_asientos_contables_job, job_id, graph)
+    schedule_workflow_api_fallback(
+        background_tasks,
+        job_id=job_id,
+        label="ensure_asientos_contables",
+        execute=lambda: _run_ensure_asientos_contables_job(job_id, graph),
+    )
     logger.info("job %s: encolado ensure_asientos_contables", job_id)
     return {
         "status": "queued",
