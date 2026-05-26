@@ -15,15 +15,10 @@ from app.application.use_cases.sharepoint_from_env import (
     resolve_configured_item,
     upload_configured_file,
 )
-from app.application.use_cases.send_validar_extractos_notification import (
-    send_validar_extractos_notification_email,
-)
-from app.application.use_cases.ensure_asientos_contables_folders import ensure_asientos_contables_folders
-from app.application.use_cases.merge_composite_validado_pdfs import merge_composite_validado_pdfs
 from app.application.use_cases.validate_payment_report import validate_payment_report_and_replace_excel
 from app.application.job_status_enrichment import enrich_job_for_http_response
+from app.application.job_runner_factory import get_job_runner
 from app.application.job_store_factory import get_job_store
-from app.application.jobs.vercel_workflow_fallback import schedule_workflow_api_fallback
 from app.domain.exceptions import GraphConfigError
 from app.models import GraphUploadRequest, MergeCompositeValidadoRequest, NotifyValidarExtractosRequest
 
@@ -31,255 +26,6 @@ router = APIRouter(prefix="/graph/sharepoint", tags=["sharepoint"])
 logger = logging.getLogger(__name__)
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
-
-
-async def _set_job(job_id: str, updates: dict[str, Any]) -> None:
-    await get_job_store().update_job(job_id, updates)
-
-
-async def _run_validation_job(job_id: str, graph: GraphClientDep) -> None:
-    await _set_job(
-        job_id,
-        {
-            "status": "running",
-            "started_at": _utc_now_iso(),
-            "updated_at": _utc_now_iso(),
-        },
-    )
-    logger.info("job %s: validate_payment_report iniciado", job_id)
-    started_ts = perf_counter()
-    try:
-        summary = await validate_payment_report_and_replace_excel(graph)
-        elapsed_ms = round((perf_counter() - started_ts) * 1000, 2)
-        await _set_job(
-            job_id,
-            {
-                "status": "completed",
-                "finished_at": _utc_now_iso(),
-                "updated_at": _utc_now_iso(),
-                "result": {
-                    "status": "ok",
-                    "message": "Ejecutado con éxito",
-                    "reaction_time_ms": elapsed_ms,
-                    "processed_rows": summary.processed_rows,
-                    "ok_count": summary.ok_count,
-                    "no_count": summary.no_count,
-                    "error_count": summary.error_count,
-                    "errors": summary.errors,
-                },
-                "error": None,
-            },
-        )
-        logger.info("job %s: validate_payment_report completado", job_id)
-    except Exception as exc:
-        await _set_job(
-            job_id,
-            {
-                "status": "failed",
-                "finished_at": _utc_now_iso(),
-                "updated_at": _utc_now_iso(),
-                "result": None,
-                "error": str(exc),
-            },
-        )
-        logger.exception("job %s: validate_payment_report falló: %s", job_id, exc)
-
-
-async def _run_notify_validar_extractos_job(
-    job_id: str,
-    graph: GraphClientDep,
-    payload: NotifyValidarExtractosRequest,
-) -> None:
-    await _set_job(
-        job_id,
-        {
-            "type": "notify_validar_extractos",
-            "status": "running",
-            "started_at": _utc_now_iso(),
-            "updated_at": _utc_now_iso(),
-        },
-    )
-    logger.info("job %s: notify_validar_extractos iniciado", job_id)
-    started_ts = perf_counter()
-    try:
-        result = await send_validar_extractos_notification_email(
-            graph,
-            historical_file_path=payload.historical_file_path,
-            to_override=payload.to,
-            cc_override=payload.cc,
-        )
-        elapsed_ms = round((perf_counter() - started_ts) * 1000, 2)
-        await _set_job(
-            job_id,
-            {
-                "status": "completed",
-                "finished_at": _utc_now_iso(),
-                "updated_at": _utc_now_iso(),
-                "elapsed_ms": elapsed_ms,
-                "result": {
-                    "status": "ok",
-                    "message": "Ejecutado con éxito",
-                    "report_date": result.report_date,
-                    "historical_file_path": result.historical_file_path,
-                    "historical_file_source": result.historical_file_source,
-                    "historico_excel_path": result.historico_excel_path,
-                    "rows_included": result.rows_included,
-                    "subject": result.subject,
-                    "attachments_count": result.attachments_count,
-                    "email_pdf_path": result.email_pdf_path,
-                    "email_pdf_error": result.email_pdf_error,
-                    "graph_sendmail_http_status": result.graph_sendmail_http_status,
-                    "mail_sender": result.mail_sender,
-                    "mail_to": result.mail_to,
-                    "merge_control_updated": result.merge_control_updated,
-                    "merge_control_file_path": result.merge_control_file_path,
-                    "merge_control_status": result.merge_control_status,
-                    "merge_control_warning": result.merge_control_warning,
-                    "merge_control_error_code": result.merge_control_error_code,
-                },
-                "error": None,
-            },
-        )
-        logger.info("job %s: notify_validar_extractos completado", job_id)
-    except Exception as exc:
-        await _set_job(
-            job_id,
-            {
-                "status": "failed",
-                "finished_at": _utc_now_iso(),
-                "updated_at": _utc_now_iso(),
-                "result": None,
-                "error": str(exc),
-            },
-        )
-        logger.exception("job %s: notify_validar_extractos falló: %s", job_id, exc)
-
-
-async def _run_merge_composite_validado_pdfs_job(
-    job_id: str,
-    graph: GraphClientDep,
-    *,
-    force_rebuild: bool = False,
-) -> None:
-    await _set_job(
-        job_id,
-        {
-            "type": "merge_composite_validado_pdfs",
-            "status": "running",
-            "started_at": _utc_now_iso(),
-            "updated_at": _utc_now_iso(),
-        },
-    )
-    logger.info("job %s: merge_composite_validado_pdfs iniciado", job_id)
-    started_ts = perf_counter()
-    try:
-        result = await merge_composite_validado_pdfs(graph, force_rebuild=force_rebuild)
-        elapsed_ms = round((perf_counter() - started_ts) * 1000, 2)
-        await _set_job(
-            job_id,
-            {
-                "status": "completed",
-                "finished_at": _utc_now_iso(),
-                "updated_at": _utc_now_iso(),
-                "elapsed_ms": elapsed_ms,
-                "result": {
-                    "status": "ok",
-                    "message": "Ejecutado con éxito",
-                    "report_date_iso": result.report_date_iso,
-                    "historico_excel_path": result.historico_excel_path,
-                    "estado_linea_contains": result.estado_linea_contains,
-                    "email_pdf_used": result.email_pdf_used,
-                    "outputs": [
-                        {
-                            "id_pago": o.id_pago,
-                            "cliente": o.cliente,
-                            "credito": o.credito,
-                            "email_pdf_path": o.email_pdf_path,
-                            "asiento_pdf_path": o.asiento_pdf_path,
-                            "asiento_pdf_paths": list(o.asiento_pdf_paths),
-                            "extracto_pdf_path": o.extracto_pdf_path,
-                            "credit_items": [dict(ci) for ci in o.credit_items],
-                            "output_relative_path": o.output_relative_path,
-                            "bytes_written": o.bytes_written,
-                            "sources_summary": o.sources_summary,
-                        }
-                        for o in result.outputs
-                    ],
-                    "skipped": list(result.skipped),
-                    "merge_control_file_path": result.merge_control_file_path,
-                    "merge_control_updated": result.merge_control_updated,
-                    "merge_control_status": result.merge_control_status,
-                    "merge_manifest_path": result.merge_manifest_path,
-                    "outputs_count": result.outputs_count,
-                    "skipped_count": result.skipped_count,
-                },
-                "error": None,
-            },
-        )
-        logger.info("job %s: merge_composite_validado_pdfs completado", job_id)
-    except Exception as exc:
-        await _set_job(
-            job_id,
-            {
-                "status": "failed",
-                "finished_at": _utc_now_iso(),
-                "updated_at": _utc_now_iso(),
-                "result": None,
-                "error": str(exc),
-            },
-        )
-        logger.exception("job %s: merge_composite_validado_pdfs falló: %s", job_id, exc)
-
-
-async def _run_ensure_asientos_contables_job(job_id: str, graph: GraphClientDep) -> None:
-    await _set_job(
-        job_id,
-        {
-            "type": "ensure_asientos_contables",
-            "status": "running",
-            "started_at": _utc_now_iso(),
-            "updated_at": _utc_now_iso(),
-        },
-    )
-    logger.info("job %s: ensure_asientos_contables iniciado", job_id)
-    started_ts = perf_counter()
-    try:
-        result = await ensure_asientos_contables_folders(graph)
-        elapsed_ms = round((perf_counter() - started_ts) * 1000, 2)
-        await _set_job(
-            job_id,
-            {
-                "status": "completed",
-                "finished_at": _utc_now_iso(),
-                "updated_at": _utc_now_iso(),
-                "elapsed_ms": elapsed_ms,
-                "result": {
-                    "status": "ok",
-                    "message": "Ejecutado con éxito",
-                    "clients_base_path": result.clients_base_path,
-                    "clients_scanned": result.clients_scanned,
-                    "credit_folders_scanned": result.credit_folders_scanned,
-                    "folders_created": result.folders_created,
-                    "folders_already_present": result.folders_already_present,
-                    "subfolder_names": list(result.subfolder_names),
-                    "errors": result.errors,
-                },
-                "error": None,
-            },
-        )
-        logger.info("job %s: ensure_asientos_contables completado", job_id)
-    except Exception as exc:
-        await _set_job(
-            job_id,
-            {
-                "status": "failed",
-                "finished_at": _utc_now_iso(),
-                "updated_at": _utc_now_iso(),
-                "result": None,
-                "error": str(exc),
-            },
-        )
-        logger.exception("job %s: ensure_asientos_contables falló: %s", job_id, exc)
 
 
 @router.get("/site")
@@ -487,14 +233,13 @@ async def validate_payment_report_queue(
             "error": None,
         },
     )
-    background_tasks.add_task(_run_validation_job, job_id, graph)
-    schedule_workflow_api_fallback(
-        background_tasks,
+    runner = get_job_runner()
+    await runner.enqueue_validate_payment_report(
         job_id=job_id,
-        label="validate_payment_report",
-        execute=lambda: _run_validation_job(job_id, graph),
+        graph=graph,
+        background_tasks=background_tasks,
     )
-    logger.info("job %s: encolado validate_payment_report", job_id)
+    logger.info("job %s: encolado validate_payment_report (%s)", job_id, type(runner).__name__)
     return {
         "status": "queued",
         "job_id": job_id,
@@ -556,21 +301,18 @@ async def post_merge_composite_validado_pdfs(
             "force_rebuild": payload.force_rebuild,
         },
     )
-    background_tasks.add_task(
-        _run_merge_composite_validado_pdfs_job,
-        job_id,
-        graph,
-        force_rebuild=payload.force_rebuild,
-    )
-    schedule_workflow_api_fallback(
-        background_tasks,
+    runner = get_job_runner()
+    await runner.enqueue_merge_composite_validado_pdfs(
         job_id=job_id,
-        label="merge_composite_validado_pdfs",
-        execute=lambda: _run_merge_composite_validado_pdfs_job(
-            job_id, graph, force_rebuild=payload.force_rebuild
-        ),
+        graph=graph,
+        force_rebuild=payload.force_rebuild,
+        background_tasks=background_tasks,
     )
-    logger.info("job %s: encolado merge_composite_validado_pdfs", job_id)
+    logger.info(
+        "job %s: encolado merge_composite_validado_pdfs (%s)",
+        job_id,
+        type(runner).__name__,
+    )
     return {
         "status": "queued",
         "job_id": job_id,
@@ -616,14 +358,16 @@ async def notify_validar_extractos_email(
             "error": None,
         },
     )
-    background_tasks.add_task(_run_notify_validar_extractos_job, job_id, graph, payload)
-    schedule_workflow_api_fallback(
-        background_tasks,
+    runner = get_job_runner()
+    await runner.enqueue_notify_validar_extractos(
         job_id=job_id,
-        label="notify_validar_extractos",
-        execute=lambda: _run_notify_validar_extractos_job(job_id, graph, payload),
+        graph=graph,
+        historical_file_path=payload.historical_file_path,
+        to_override=payload.to,
+        cc_override=payload.cc,
+        background_tasks=background_tasks,
     )
-    logger.info("job %s: encolado notify_validar_extractos", job_id)
+    logger.info("job %s: encolado notify_validar_extractos (%s)", job_id, type(runner).__name__)
     return {
         "status": "queued",
         "job_id": job_id,
@@ -660,14 +404,13 @@ async def post_ensure_asientos_contables_folders(
             "error": None,
         },
     )
-    background_tasks.add_task(_run_ensure_asientos_contables_job, job_id, graph)
-    schedule_workflow_api_fallback(
-        background_tasks,
+    runner = get_job_runner()
+    await runner.enqueue_ensure_asientos_contables(
         job_id=job_id,
-        label="ensure_asientos_contables",
-        execute=lambda: _run_ensure_asientos_contables_job(job_id, graph),
+        graph=graph,
+        background_tasks=background_tasks,
     )
-    logger.info("job %s: encolado ensure_asientos_contables", job_id)
+    logger.info("job %s: encolado ensure_asientos_contables (%s)", job_id, type(runner).__name__)
     return {
         "status": "queued",
         "job_id": job_id,

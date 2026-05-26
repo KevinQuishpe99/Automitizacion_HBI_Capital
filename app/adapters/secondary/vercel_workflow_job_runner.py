@@ -9,13 +9,37 @@ from app.application.job_manager import JobManager
 from app.application.job_runner_settings import (
     workflow_amortization_apply_name,
     workflow_amortization_dry_run_name,
+    workflow_ensure_asientos_contables_name,
+    workflow_merge_composite_validado_pdfs_name,
+    workflow_notify_validar_extractos_name,
+    workflow_payment_validation_finalize_name,
+    workflow_payment_validation_generate_name,
     workflow_ping_name,
+    workflow_validate_payment_report_name,
 )
 from app.application.jobs.amortization_apply_fallback import (
     execute_amortization_apply_job_with_graph,
 )
 from app.application.jobs.amortization_dry_run_fallback import (
     execute_amortization_dry_run_job_with_graph,
+)
+from app.application.jobs.ensure_asientos_contables_fallback import (
+    execute_ensure_asientos_contables_job_with_graph,
+)
+from app.application.jobs.merge_composite_validado_pdfs_fallback import (
+    execute_merge_composite_validado_pdfs_job_with_graph,
+)
+from app.application.jobs.notify_validar_extractos_fallback import (
+    execute_notify_validar_extractos_job_with_graph,
+)
+from app.application.jobs.payment_validation_finalize_fallback import (
+    execute_payment_validation_finalize_job_with_graph,
+)
+from app.application.jobs.payment_validation_generate_fallback import (
+    execute_payment_validation_generate_job_with_graph,
+)
+from app.application.jobs.validate_payment_report_fallback import (
+    execute_validate_payment_report_job_with_graph,
 )
 from app.application.jobs.vercel_workflow_fallback import schedule_workflow_api_fallback
 from app.application.jobs.workflow_ping_job import execute_workflow_ping_job
@@ -49,10 +73,6 @@ class VercelWorkflowJobRunner:
             workflow_name,
         )
         run = await start(workflow_fn, job_id=job_id, **kwargs)
-        print(
-            f"WORKFLOW_START_RUN_ID job_id={job_id} wrun={run.run_id} workflow={workflow_name}",
-            flush=True,
-        )
         logger.info(
             "workflow.start after job_id=%s workflow_name=%s workflow_run_id=%s",
             job_id,
@@ -77,10 +97,6 @@ class VercelWorkflowJobRunner:
     ) -> None:
         from app.workflows.workflow_ping_workflow import workflow_ping_workflow
 
-        print(
-            f"WORKFLOW_START_PING job_id={job_id} workflow={workflow_ping_name()}",
-            flush=True,
-        )
         await self._start_workflow(
             workflow_fn=workflow_ping_workflow,
             job_id=job_id,
@@ -143,10 +159,6 @@ class VercelWorkflowJobRunner:
         del graph
         from app.workflows.amortization_apply_workflow import amortization_apply_workflow
 
-        print(
-            f"WORKFLOW_START_APPLY job_id={job_id} workflow={workflow_amortization_apply_name()}",
-            flush=True,
-        )
         await self._start_workflow(
             workflow_fn=amortization_apply_workflow,
             job_id=job_id,
@@ -167,6 +179,191 @@ class VercelWorkflowJobRunner:
                 report_date_iso=report_date_iso,
                 merge_manifest_path=merge_manifest_path,
                 historical_file_path=historical_file_path,
+            ),
+        )
+
+    async def enqueue_validate_payment_report(
+        self,
+        *,
+        job_id: str,
+        graph: Any,
+        background_tasks: BackgroundTasks | None = None,
+    ) -> None:
+        del graph
+        from app.workflows.validate_payment_report_workflow import (
+            validate_payment_report_workflow,
+        )
+
+        await self._start_workflow(
+            workflow_fn=validate_payment_report_workflow,
+            job_id=job_id,
+            workflow_name=workflow_validate_payment_report_name(),
+            kwargs={},
+        )
+        schedule_workflow_api_fallback(
+            background_tasks,
+            job_id=job_id,
+            label="validate_payment_report",
+            execute=lambda: execute_validate_payment_report_job_with_graph(job_id),
+        )
+
+    async def enqueue_notify_validar_extractos(
+        self,
+        *,
+        job_id: str,
+        graph: Any,
+        historical_file_path: str | None = None,
+        to_override: str | None = None,
+        cc_override: str | None = None,
+        background_tasks: BackgroundTasks | None = None,
+    ) -> None:
+        del graph
+        from app.workflows.notify_validar_extractos_workflow import (
+            notify_validar_extractos_workflow,
+        )
+
+        await self._start_workflow(
+            workflow_fn=notify_validar_extractos_workflow,
+            job_id=job_id,
+            workflow_name=workflow_notify_validar_extractos_name(),
+            kwargs={
+                "historical_file_path": historical_file_path,
+                "to_override": to_override,
+                "cc_override": cc_override,
+            },
+            extra_job_updates={"type": "notify_validar_extractos"},
+        )
+        schedule_workflow_api_fallback(
+            background_tasks,
+            job_id=job_id,
+            label="notify_validar_extractos",
+            execute=lambda: execute_notify_validar_extractos_job_with_graph(
+                job_id,
+                historical_file_path=historical_file_path,
+                to_override=to_override,
+                cc_override=cc_override,
+            ),
+        )
+
+    async def enqueue_merge_composite_validado_pdfs(
+        self,
+        *,
+        job_id: str,
+        graph: Any,
+        force_rebuild: bool = False,
+        background_tasks: BackgroundTasks | None = None,
+    ) -> None:
+        del graph
+        from app.workflows.merge_composite_validado_pdfs_workflow import (
+            merge_composite_validado_pdfs_workflow,
+        )
+
+        await self._start_workflow(
+            workflow_fn=merge_composite_validado_pdfs_workflow,
+            job_id=job_id,
+            workflow_name=workflow_merge_composite_validado_pdfs_name(),
+            kwargs={"force_rebuild": force_rebuild},
+            extra_job_updates={"type": "merge_composite_validado_pdfs"},
+        )
+        schedule_workflow_api_fallback(
+            background_tasks,
+            job_id=job_id,
+            label="merge_composite_validado_pdfs",
+            execute=lambda: execute_merge_composite_validado_pdfs_job_with_graph(
+                job_id, force_rebuild=force_rebuild
+            ),
+        )
+
+    async def enqueue_ensure_asientos_contables(
+        self,
+        *,
+        job_id: str,
+        graph: Any,
+        background_tasks: BackgroundTasks | None = None,
+    ) -> None:
+        del graph
+        from app.workflows.ensure_asientos_contables_workflow import (
+            ensure_asientos_contables_workflow,
+        )
+
+        await self._start_workflow(
+            workflow_fn=ensure_asientos_contables_workflow,
+            job_id=job_id,
+            workflow_name=workflow_ensure_asientos_contables_name(),
+            kwargs={},
+            extra_job_updates={"type": "ensure_asientos_contables"},
+        )
+        schedule_workflow_api_fallback(
+            background_tasks,
+            job_id=job_id,
+            label="ensure_asientos_contables",
+            execute=lambda: execute_ensure_asientos_contables_job_with_graph(job_id),
+        )
+
+    async def enqueue_payment_validation_generate(
+        self,
+        *,
+        job_id: str,
+        graph: Any,
+        process_date_iso: str,
+        background_tasks: BackgroundTasks | None = None,
+    ) -> None:
+        del graph
+        from app.workflows.payment_validation_generate_workflow import (
+            payment_validation_generate_workflow,
+        )
+
+        await self._start_workflow(
+            workflow_fn=payment_validation_generate_workflow,
+            job_id=job_id,
+            workflow_name=workflow_payment_validation_generate_name(),
+            kwargs={"process_date_iso": process_date_iso},
+            extra_job_updates={"type": "generate"},
+        )
+        schedule_workflow_api_fallback(
+            background_tasks,
+            job_id=job_id,
+            label="generate",
+            execute=lambda: execute_payment_validation_generate_job_with_graph(
+                job_id, process_date_iso=process_date_iso
+            ),
+        )
+
+    async def enqueue_payment_validation_finalize(
+        self,
+        *,
+        job_id: str,
+        graph: Any,
+        validation_file: str | None,
+        validation_file_path: str | None,
+        process_date_iso: str,
+        background_tasks: BackgroundTasks | None = None,
+    ) -> None:
+        del graph
+        from app.workflows.payment_validation_finalize_workflow import (
+            payment_validation_finalize_workflow,
+        )
+
+        await self._start_workflow(
+            workflow_fn=payment_validation_finalize_workflow,
+            job_id=job_id,
+            workflow_name=workflow_payment_validation_finalize_name(),
+            kwargs={
+                "validation_file": validation_file,
+                "validation_file_path": validation_file_path,
+                "process_date_iso": process_date_iso,
+            },
+            extra_job_updates={"type": "finalize"},
+        )
+        schedule_workflow_api_fallback(
+            background_tasks,
+            job_id=job_id,
+            label="finalize",
+            execute=lambda: execute_payment_validation_finalize_job_with_graph(
+                job_id,
+                validation_file=validation_file,
+                validation_file_path=validation_file_path,
+                process_date_iso=process_date_iso,
             ),
         )
 

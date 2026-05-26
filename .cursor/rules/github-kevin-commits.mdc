@@ -1,0 +1,49 @@
+---
+description: Commits y cambios en GitHub solo vía MCP github-kevin (kevin19925)
+alwaysApply: true
+---
+
+# GitHub: usar siempre MCP `github-kevin`
+
+En **Automitizacion_HBI_Capital** no uses `git commit`, `git push` ni el MCP `github` para publicar cambios en GitHub.
+
+## Repositorio
+
+- **owner/repo:** `KevinQuishpe99/Automitizacion_HBI_Capital`
+- **Rama por defecto:** `main` (confirmar con `list_branches` si hay duda)
+
+## Servidor MCP
+
+- **Servidor:** `user-github-kevin` (cuenta `kevin19925`)
+- **Herramienta de commit:** `create_or_update_file`
+
+## Flujo obligatorio al subir cambios
+
+1. Editar archivos en el workspace local (como siempre).
+2. Para cada archivo a publicar, llamar `create_or_update_file` en `user-github-kevin`:
+   - `repo`: `KevinQuishpe99/Automitizacion_HBI_Capital`
+   - `path`: ruta relativa al root del repo
+   - `content`: contenido completo del archivo en texto plano
+   - `message`: mensaje de commit claro (español o inglés según el repo)
+   - `branch`: rama destino (p. ej. `main` o la rama de feature activa)
+   - `sha`: si el archivo ya existe, obtenerlo antes con `get_file_contents` y pasar el `sha` devuelto
+3. Verificar con `get_file_contents` o `get_repository` que el cambio quedó en GitHub.
+4. Opcional: `get_me` solo para confirmar que el token sigue siendo `kevin19925`.
+
+## Prohibido en este proyecto
+
+- `git commit` / `git push` / `git push --force` para publicar al remoto
+- MCP `user-github` (token de otra cuenta)
+- Scripts que usen otro `GITHUB_TOKEN` distinto al de `github-kevin`
+
+## Si falla la API (404 / 403)
+
+El PAT de `github-kevin` debe tener scope **`repo`** y acceso al repo privado (colaborador en `KevinQuishpe99/Automitizacion_HBI_Capital`). No cambiar a git local sin avisar al usuario y pedir que actualice el token en `~/.cursor/mcp.json` → `github-kevin`.
+
+## Commits con varios archivos
+
+`create_or_update_file` genera **un commit por archivo**. Usar mensajes coherentes (p. ej. mismo prefijo `feat:` en todos).
+
+## Reinicio del MCP
+
+Tras actualizar `github-mcp` en `D:/ProyectosClearMinds/MCPs/github-mcp`, reiniciar el servidor `github-kevin` en Cursor para cargar herramientas nuevas.

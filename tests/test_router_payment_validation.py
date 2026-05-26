@@ -17,7 +17,7 @@ from app.application.job_store_factory import (
     get_job_store,
     reset_job_store_for_tests,
 )
-from app.adapters.primary.http.routers import payment_validation as payment_validation_router
+from app.application import job_runner_factory
 from app.adapters.primary.http.routers.payment_validation import router
 from app.adapters.primary.http.deps import init_graph_client
 
@@ -47,9 +47,11 @@ def build_app() -> FastAPI:
 @pytest.fixture(autouse=True)
 def reset_job_manager():
     """Resetea JobStore y JobManager entre tests para evitar contaminación."""
+    job_runner_factory.reset_job_runner_for_tests()
     reset_job_store_for_tests()
     yield
     reset_job_store_for_tests()
+    job_runner_factory.reset_job_runner_for_tests()
 
 
 @pytest.fixture
@@ -57,62 +59,67 @@ def client():
     return TestClient(build_app(), raise_server_exceptions=False)
 
 
-def test_finalize_queue_accepts_validation_file(client, monkeypatch):
-    captured = {}
+class _CaptureFinalizeRunner:
+    def __init__(self) -> None:
+        self.captured: dict = {}
 
-    async def fake_run_finalize_job(job_id, graph, validation_file, validation_file_path, process_date):
-        captured["job_id"] = job_id
-        captured["validation_file"] = validation_file
-        captured["validation_file_path"] = validation_file_path
-        captured["process_date"] = process_date.isoformat()
+    async def enqueue_payment_validation_finalize(
+        self,
+        *,
+        job_id: str,
+        graph,
+        validation_file: str | None,
+        validation_file_path: str | None,
+        process_date_iso: str,
+        background_tasks=None,
+    ) -> None:
+        self.captured = {
+            "job_id": job_id,
+            "validation_file": validation_file,
+            "validation_file_path": validation_file_path,
+            "process_date": process_date_iso,
+        }
 
-    monkeypatch.setattr(payment_validation_router, "_run_finalize_job", fake_run_finalize_job)
 
-    res = client.post(
-        "/graph/sharepoint/payment-validation/finalize/queue",
-        json={"validation_file": "validacion_pagos_2026-05-10.xlsx"}
-    )
-
-    assert res.status_code == 202
-    assert captured["validation_file"] == "validacion_pagos_2026-05-10.xlsx"
-    assert captured["validation_file_path"] is None
-
-
-def test_finalize_queue_accepts_validation_file_path(client, monkeypatch):
-    captured = {}
-
-    async def fake_run_finalize_job(job_id, graph, validation_file, validation_file_path, process_date):
-        captured["validation_file"] = validation_file
-        captured["validation_file_path"] = validation_file_path
-        captured["process_date"] = process_date.isoformat()
-
-    monkeypatch.setattr(payment_validation_router, "_run_finalize_job", fake_run_finalize_job)
+def test_finalize_queue_accepts_validation_file(client):
+    runner = _CaptureFinalizeRunner()
+    job_runner_factory.configure_job_runner(runner)
 
     res = client.post(
         "/graph/sharepoint/payment-validation/finalize/queue",
-        json={"validation_file_path": "revision/subcarpeta/val_manual.xlsx"}
+        json={"validation_file": "validacion_pagos_2026-05-10.xlsx"},
     )
 
     assert res.status_code == 202
-    assert captured["validation_file"] is None
-    assert captured["validation_file_path"] == "revision/subcarpeta/val_manual.xlsx"
+    assert runner.captured["validation_file"] == "validacion_pagos_2026-05-10.xlsx"
+    assert runner.captured["validation_file_path"] is None
 
 
-def test_finalize_queue_accepts_process_date(client, monkeypatch):
-    captured = {}
-
-    async def fake_run_finalize_job(job_id, graph, validation_file, validation_file_path, process_date):
-        captured["process_date"] = process_date.isoformat()
-
-    monkeypatch.setattr(payment_validation_router, "_run_finalize_job", fake_run_finalize_job)
+def test_finalize_queue_accepts_validation_file_path(client):
+    runner = _CaptureFinalizeRunner()
+    job_runner_factory.configure_job_runner(runner)
 
     res = client.post(
         "/graph/sharepoint/payment-validation/finalize/queue",
-        json={"process_date": "2026-05-10"}
+        json={"validation_file_path": "revision/subcarpeta/val_manual.xlsx"},
     )
 
     assert res.status_code == 202
-    assert captured["process_date"] == "2026-05-10"
+    assert runner.captured["validation_file"] is None
+    assert runner.captured["validation_file_path"] == "revision/subcarpeta/val_manual.xlsx"
+
+
+def test_finalize_queue_accepts_process_date(client):
+    runner = _CaptureFinalizeRunner()
+    job_runner_factory.configure_job_runner(runner)
+
+    res = client.post(
+        "/graph/sharepoint/payment-validation/finalize/queue",
+        json={"process_date": "2026-05-10"},
+    )
+
+    assert res.status_code == 202
+    assert runner.captured["process_date"] == "2026-05-10"
 
 
 # ──────────────────────────────────────────────────────────────────────────────

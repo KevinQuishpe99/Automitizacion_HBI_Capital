@@ -12,10 +12,7 @@ from app.application.job_status_enrichment import enrich_job_for_http_response
 from app.application.job_manager import JobManager
 from app.application.job_runner_factory import get_job_runner
 from app.application.jobs.amortization_dry_run_job import execute_amortization_dry_run_job
-from app.application.jobs.vercel_workflow_fallback import schedule_workflow_api_fallback
 from app.application.payment_validation_locks import lock_status
-from app.application.use_cases.payment_validation_generate import generate_payment_validation
-from app.application.use_cases.payment_validation_finalize import finalize_payment_validation
 from app.application.use_cases.setup_ibr_workbook import (
     IbrWorkbookSetupError,
     setup_ibr_workbook,
@@ -63,85 +60,6 @@ class AmortizationDryRunRequest(BaseModel):
     report_date_iso: str | None = None
     merge_manifest_path: str | None = None
     historical_file_path: str | None = None
-
-
-# ─── Background Tasks ─────────────────────────────────────────────────────────
-
-async def _run_generate_job(job_id: str, graph: GraphClientDep, process_date: date) -> None:
-    jm = JobManager()
-    await jm.set_job(job_id, {
-        "status": "running",
-        "started_at": _utc_now_iso(),
-        "updated_at": _utc_now_iso(),
-    })
-    logger.info("job %s: generate_payment_validation iniciado", job_id)
-    started = perf_counter()
-    try:
-        result = await generate_payment_validation(graph, process_date)
-        elapsed_ms = round((perf_counter() - started) * 1000, 2)
-        await jm.set_job(job_id, {
-            "status": "completed",
-            "finished_at": _utc_now_iso(),
-            "updated_at": _utc_now_iso(),
-            "result": {
-                **result,
-                "process_date": process_date.isoformat(),
-                "elapsed_ms": elapsed_ms,
-            },
-        })
-        logger.info("job %s: completado en %.2fms", job_id, elapsed_ms)
-    except Exception as exc:
-        await jm.set_job(job_id, {
-            "status": "failed",
-            "finished_at": _utc_now_iso(),
-            "updated_at": _utc_now_iso(),
-            "error": {"type": type(exc).__name__, "message": str(exc)},
-        })
-        logger.error("job %s: falló con %s: %s", job_id, type(exc).__name__, exc)
-    finally:
-        await jm.finish_generate()
-
-
-async def _run_finalize_job(
-    job_id: str,
-    graph: GraphClientDep,
-    validation_file: str | None,
-    validation_file_path: str | None,
-    process_date: date,
-) -> None:
-    jm = JobManager()
-    await jm.set_job(job_id, {
-        "status": "running",
-        "started_at": _utc_now_iso(),
-        "updated_at": _utc_now_iso(),
-    })
-    logger.info("job %s: finalize_payment_validation iniciado", job_id)
-    started = perf_counter()
-    try:
-        result = await finalize_payment_validation(
-            graph,
-            validation_file=validation_file,
-            validation_file_path=validation_file_path,
-            process_date=process_date,
-        )
-        elapsed_ms = round((perf_counter() - started) * 1000, 2)
-        await jm.set_job(job_id, {
-            "status": "completed",
-            "finished_at": _utc_now_iso(),
-            "updated_at": _utc_now_iso(),
-            "result": {**result, "elapsed_ms": elapsed_ms},
-        })
-        logger.info("job %s: completado en %.2fms", job_id, elapsed_ms)
-    except Exception as exc:
-        await jm.set_job(job_id, {
-            "status": "failed",
-            "finished_at": _utc_now_iso(),
-            "updated_at": _utc_now_iso(),
-            "error": {"type": type(exc).__name__, "message": str(exc)},
-        })
-        logger.error("job %s: falló con %s: %s", job_id, type(exc).__name__, exc)
-    finally:
-        await jm.finish_finalize()
 
 
 async def _run_amortization_dry_run_job(
@@ -208,14 +126,14 @@ async def queue_generate(
         "updated_at": _utc_now_iso(),
     })
 
-    background_tasks.add_task(_run_generate_job, job_id, graph, process_date)
-    schedule_workflow_api_fallback(
-        background_tasks,
+    runner = get_job_runner()
+    await runner.enqueue_payment_validation_generate(
         job_id=job_id,
-        label="generate",
-        execute=lambda: _run_generate_job(job_id, graph, process_date),
+        graph=graph,
+        process_date_iso=process_date.isoformat(),
+        background_tasks=background_tasks,
     )
-    logger.info("job %s: generate encolado", job_id)
+    logger.info("job %s: generate encolado (%s)", job_id, type(runner).__name__)
 
     return {"job_id": job_id, "status": "queued"}
 
@@ -270,23 +188,16 @@ async def queue_finalize(
         "updated_at": _utc_now_iso(),
     })
 
-    background_tasks.add_task(
-        _run_finalize_job,
-        job_id,
-        graph,
-        validation_file,
-        validation_file_path,
-        process_date,
-    )
-    schedule_workflow_api_fallback(
-        background_tasks,
+    runner = get_job_runner()
+    await runner.enqueue_payment_validation_finalize(
         job_id=job_id,
-        label="finalize",
-        execute=lambda: _run_finalize_job(
-            job_id, graph, validation_file, validation_file_path, process_date
-        ),
+        graph=graph,
+        validation_file=validation_file,
+        validation_file_path=validation_file_path,
+        process_date_iso=process_date.isoformat(),
+        background_tasks=background_tasks,
     )
-    logger.info("job %s: finalize encolado", job_id)
+    logger.info("job %s: finalize encolado (%s)", job_id, type(runner).__name__)
 
     return {"job_id": job_id, "status": "queued"}
 
