@@ -27,12 +27,41 @@ def _memory_store() -> None:
     JobManager._instance = None
 
 
+def test_begin_job_execution_takes_over_workflow_dispatched() -> None:
+    async def run() -> None:
+        from app.application.job_store_factory import get_job_store
+
+        store = get_job_store()
+        await store.create_job(
+            "j-dispatch",
+            {
+                "job_id": "j-dispatch",
+                "status": "running",
+                "execution_phase": "workflow_dispatched",
+            },
+        )
+        jm = JobManager()
+        await begin_job_execution(jm, "j-dispatch")
+        job = await jm.get_job("j-dispatch")
+        assert job is not None
+        assert job["execution_phase"] == "executing"
+
+    asyncio.run(run())
+
+
 def test_begin_job_execution_skips_when_already_running() -> None:
     async def run() -> None:
         from app.application.job_store_factory import get_job_store
 
         store = get_job_store()
-        await store.create_job("j1", {"job_id": "j1", "status": "running"})
+        await store.create_job(
+            "j1",
+            {
+                "job_id": "j1",
+                "status": "running",
+                "execution_phase": "executing",
+            },
+        )
         jm = JobManager()
         with pytest.raises(JobExecutionSkipped):
             await begin_job_execution(jm, "j1")

@@ -6,11 +6,29 @@ Importar todos los módulos con ``@wf.workflow`` para que el runtime los registr
 
 from __future__ import annotations
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 print("WORKFLOW_ENTRYPOINT_LOADED", flush=True)
 
 from app.workflows.vercel_sdk_compat import apply_vercel_workflow_event_result_compat
 
 apply_vercel_workflow_event_result_compat()
+
+from app.application.job_store_factory import (
+    get_job_store,
+    reset_job_store_singleton,
+    resolved_job_store_backend_label,
+)
+
+reset_job_store_singleton()
+_store = get_job_store()
+print(
+    f"WORKFLOW_JOB_STORE backend={resolved_job_store_backend_label()} "
+    f"class={type(_store).__name__}",
+    flush=True,
+)
 
 # noqa: F401 — side effect: register workflows on shared ``wf``
 from app.workflows import amortization_dry_run_workflow as _amortization_dry_run_workflow

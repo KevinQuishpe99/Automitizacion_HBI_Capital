@@ -79,10 +79,14 @@ class VercelWorkflowJobRunner:
             workflow_name,
             run.run_id,
         )
+        now = _utc_now_iso()
         updates: dict[str, Any] = {
             "workflow_run_id": run.run_id,
             "workflow_name": workflow_name,
-            "updated_at": _utc_now_iso(),
+            "status": "running",
+            "started_at": now,
+            "execution_phase": "workflow_dispatched",
+            "updated_at": now,
         }
         if extra_job_updates:
             updates.update(extra_job_updates)

@@ -62,7 +62,12 @@ def test_run_job_if_still_queued_skips_when_running_recent() -> None:
         now = datetime.now(timezone.utc).isoformat()
         await store.create_job(
             "j2",
-            {"job_id": "j2", "status": "running", "started_at": now},
+            {
+                "job_id": "j2",
+                "status": "running",
+                "started_at": now,
+                "execution_phase": "executing",
+            },
         )
         executed: list[str] = []
 
@@ -124,11 +129,54 @@ def test_run_job_if_still_queued_skips_when_workflow_picks_up(monkeypatch: pytes
             executed.append("ok")
 
         async def advance_to_running() -> None:
+            from datetime import datetime, timezone
+
             await asyncio.sleep(0.35)
-            await store.update_job("j4", {"status": "running"})
+            await store.update_job(
+                "j4",
+                {
+                    "status": "running",
+                    "execution_phase": "executing",
+                    "started_at": datetime.now(timezone.utc).isoformat(),
+                },
+            )
 
         asyncio.create_task(advance_to_running())
         await run_job_if_still_queued("j4", execute=execute, label="generate", delay_seconds=0.05)
         assert executed == []
+
+    asyncio.run(_run())
+
+
+def test_run_job_if_still_queued_runs_when_workflow_dispatched_stale(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from datetime import datetime, timedelta, timezone
+
+    from app.application.job_store_factory import get_job_store
+
+    monkeypatch.setenv("VERCEL_WORKFLOW_DISPATCH_TAKEOVER_SECONDS", "5")
+
+    async def _run() -> None:
+        store = get_job_store()
+        old = (datetime.now(timezone.utc) - timedelta(seconds=30)).isoformat()
+        await store.create_job(
+            "j5",
+            {
+                "job_id": "j5",
+                "status": "running",
+                "started_at": old,
+                "execution_phase": "workflow_dispatched",
+                "workflow_run_id": "wrun_test",
+            },
+        )
+        executed: list[str] = []
+
+        async def execute() -> None:
+            executed.append("ok")
+            await store.update_job("j5", {"status": "completed"})
+
+        await run_job_if_still_queued("j5", execute=execute, label="generate", delay_seconds=0.05)
+        assert executed == ["ok"]
 
     asyncio.run(_run())

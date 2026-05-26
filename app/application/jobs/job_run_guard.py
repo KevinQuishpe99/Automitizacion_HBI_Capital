@@ -58,6 +58,7 @@ async def begin_job_execution(
         "status": "running",
         "started_at": _utc_now_iso(),
         "updated_at": _utc_now_iso(),
+        "execution_phase": "executing",
     }
     if extra_updates:
         running_updates.update(extra_updates)
@@ -71,6 +72,11 @@ async def begin_job_execution(
     if status in _TERMINAL_STATUSES:
         raise JobExecutionSkipped(f"job already {status}")
     if status == "running":
+        phase = str(job.get("execution_phase") or "")
+        if phase == "workflow_dispatched":
+            running_updates["execution_phase"] = "executing"
+            await job_manager.set_job(job_id, running_updates)
+            return
         raise JobExecutionSkipped("job already running")
     if status != "queued":
         raise JobExecutionSkipped(f"unexpected status {status}")
